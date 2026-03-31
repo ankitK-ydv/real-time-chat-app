@@ -6,23 +6,27 @@ body {
   background: radial-gradient(circle at top, #1e40af, #0f172a);
   color: #e2e8f0;
   min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* App shell for desktop and mobile */
 .chat-container {
   width: 100%;
   min-height: 100vh;
+  height: 100vh;
   display: flex;
   justify-content: center;
-  align-items: center;
-  padding: 10px;
+  align-items: stretch;
+  padding: 0;
   box-sizing: border-box;
 }
 
 .app-shell {
   width: 100%;
   max-width: 1100px;
-  height: 90vh;
+  height: 100%;
+  max-height: 100vh;
   background: #0f172a;
   border-radius: 16px;
   overflow: hidden;
@@ -35,6 +39,7 @@ body {
   display: flex;
   flex-direction: column;
   background: #1e293b;
+  height: 100%;
 }
 
 /* header */
@@ -84,6 +89,7 @@ body {
 /* messages */
 .messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 14px;
   display: flex;
@@ -174,7 +180,8 @@ body {
 @media (max-width: 600px) {
   .app-shell {
     grid-template-columns: 1fr;
-    height: 100vh;
+    height: 100%;
+    max-height: 100%;
     border-radius: 0;
     box-shadow: none;
   }
@@ -182,16 +189,35 @@ body {
   .chat-container {
     padding: 0;
     min-height: 100vh;
+    height: 100vh;
   }
 
   .header {
     font-size: 16px;
   }
 
+  #users {
+    max-height: 20vh;
+    height: auto;
+  }
+
   .message {
     max-width: 85%;
   }
+
+  .input-box {
+    padding: 8px;
+  }
+
+  .input-box input {
+    padding: 10px;
+  }
+
+  .input-box button {
+    padding: 8px 14px;
+  }
 }
+
 
 @media (min-width: 768px) {
   body {
