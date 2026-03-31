@@ -9,18 +9,20 @@
 <body>
 
 <div class="chat-container">
-
-  <div class="header">💬 Chat App</div>
-
-  <div id="users" style="padding:10px; border-bottom:1px solid #ffffff;"></div>
-
-  <div class="messages" id="messages"></div>
-
-  <div class="input-box">
-    <input id="msg" placeholder="Type a message">
-    <button onclick="send()">Send</button>
+  <div class="app-shell">
+    <div id="users" class="sidebar">
+      <div class="header">💬 Online Users</div>
+    </div>
+    <div class="chat-panel">
+      <div class="header">Chat</div>
+      <div id="typing" style="color:gray; padding-left:10px;"></div>
+      <div class="messages" id="messages"></div>
+      <div class="input-box">
+        <input id="msg" placeholder="Type a message" oninput="typingHandler()" onkeypress="handleKeyPress(event)">
+        <button onclick="send()">Send</button>
+      </div>
+    </div>
   </div>
-
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
@@ -33,14 +35,15 @@ let username = localStorage.getItem("username");
 
 // current room variable
 let currentRoom = "";
+let activeUserElement = null;
 
 // ❌ agar direct chat page open kare
 if(!username){
-  window.location.href = "login.html";
+  window.location.href = "index.html";
 }
 
-// server ko username bhejo
-socket.emit("join", username);
+// Authenticate socket with username
+socket.emit("authenticate", username);
 
 // 🔥 default room (global)
 currentRoom = username + "_global";
@@ -51,14 +54,18 @@ socket.on("userList", function(users){
 
   let usersDiv = document.getElementById("users");
 
-  usersDiv.innerHTML = "<b>Online Users:</b><br>";
+  usersDiv.innerHTML = "<b>💭 Online Users</b><br>";
 
   users.forEach(user => {
 
-    if(user !== username){
+    if(user.name !== username){
+
+      let statusColor = user.online ? "green" : "gray";
+
       usersDiv.innerHTML += `
-        <div onclick="startChat('${user}')" style="cursor:pointer; padding:5px;">
-          🟢 ${user}
+        <div class="user-item" data-user="${user.name}" onclick="startChat('${user.name}')">
+          <span class="status-dot" style="color:${statusColor}; font-size: 12px;">●</span> 
+          <span>${user.name}</span>
         </div>
       `;
     }
@@ -67,14 +74,56 @@ socket.on("userList", function(users){
 
 });
 
+let typingTimeout;
+
+function typingHandler(){
+  socket.emit("typing", currentRoom);
+
+  clearTimeout(typingTimeout);
+
+  typingTimeout = setTimeout(() => {
+    socket.emit("stopTyping", currentRoom);
+  }, 1000);
+}
+
+function handleKeyPress(event){
+  if(event.key === "Enter") {
+    event.preventDefault();
+    send();
+  }
+}
+
+
+socket.on("typing", function(user){
+if(user !== username){
+  document.getElementById("typing").innerText = user + " is typing...";
+}
+});
+
+socket.on("stopTyping", function(){
+  document.getElementById("typing").innerText = "";
+});
+
+
 // 🔥 NEW: start private chat
 function startChat(otherUser){
-
   currentRoom = [username, otherUser].sort().join("_");
 
   socket.emit("joinRoom", currentRoom);
 
   document.getElementById("messages").innerHTML = "";
+
+  // Remove active class from previous user
+  if(activeUserElement) {
+    activeUserElement.classList.remove("active");
+  }
+
+  // Add active class to clicked user
+  const userElement = document.querySelector(`[data-user="${otherUser}"]`);
+  if(userElement) {
+    userElement.classList.add("active");
+    activeUserElement = userElement;
+  }
 
   console.log("Chat with:", otherUser);
 }
@@ -83,12 +132,23 @@ function send(){
   let msg = document.getElementById("msg").value;
   if(msg.trim() === "") return;
 
+  // 🔥 NEW: unique message ID
+  const messageId = Date.now();
+
   socket.emit("chat message", {
     msg: msg,
-    roomId: currentRoom
+    roomId: currentRoom,
+    id: messageId   // 👈 yaha add kiya
   });
 
   document.getElementById("msg").value = "";
+
+  // Add animation to send button
+  const sendBtn = document.querySelector(".input-box button");
+  sendBtn.style.animation = "none";
+  setTimeout(() => {
+    sendBtn.style.animation = "sendPulse 0.6s ease-out";
+  }, 10);
 }
 
 socket.on("chat message", function(data){
@@ -100,21 +160,46 @@ socket.on("chat message", function(data){
     div.classList.add("sent");
   } else {
     div.classList.add("received");
+
+  socket.emit("delivered", {
+  roomId: currentRoom,
+  id: data.id
+});
+
+socket.emit("seen", {
+  roomId: currentRoom,
+  id: data.id
+});
+
   }
 
-  div.innerHTML = `
+ div.innerHTML = `
+  <div id="msg-${data.id}">
     <div>${data.user}</div>
     <div>${data.original}</div>
     ${data.translated && data.translated !== data.original 
       ? `<small>🌐 ${data.translated}</small>` 
       : ""}
-  `;
+    <small id="status-${data.id}">✔</small>
+  </div>
+`;
 
   document.getElementById("messages").appendChild(div);
 
   document.getElementById("messages").scrollTop =
     document.getElementById("messages").scrollHeight;
 });
+
+socket.on("delivered", function(id){
+  let el = document.getElementById("status-" + id);
+  if(el) el.innerText = "✔✔";
+});
+
+socket.on("seen", function(id){
+  let el = document.getElementById("status-" + id);
+  if(el) el.innerText = "viewed";
+});
+
 </script>
 
 </body>

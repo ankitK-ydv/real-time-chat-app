@@ -1,38 +1,116 @@
 let users = {};
-
+let registeredUsers = {};
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const axios = require("axios");
+const cors = require("cors");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
 
-// ✅ NEW: dynamic port (Render ke liye)
+//  NEW: dynamic port (Render ke liye)
 const PORT = process.env.PORT || 3000;
 
 io.on("connection", (socket) => {
 
-  // 🔥 USER JOIN
-  socket.on("join", (username) => {
+  // Helper: user list deduplicated by username, online true if any active socket
+function getUniqueUserList() {
+  const unique = {};
+  Object.values(users).forEach((user) => {
+    if (!unique[user.name]) {
+      unique[user.name] = { name: user.name, online: user.online };
+    } else if (user.online) {
+      unique[user.name].online = true;
+    }
+  });
+  return Object.values(unique);
+}
+
+  // USER JOIN
+
+socket.on("authenticate", (username) => {
+  socket.username = username;
+  
+  // Add to users list if not already there
+  if (!users[socket.id]) {
+    users[socket.id] = {
+      name: username,
+      online: true
+    };
+  }
+
+  // Broadcast updated user list
+  io.emit("userList", getUniqueUserList());
+
+  console.log("User authenticated:", username);
+});
+
+socket.on("register", ({ username, password }) => {
+
+  if(registeredUsers[username]){
+    socket.emit("registerError", "User already exists");
+    return;
+  }
+
+  registeredUsers[username] = password;
+
+  socket.emit("registerSuccess", "Registered successfully");
+});
+
+
+socket.on("login", ({ username, password }) => {
+
+  if(registeredUsers[username] === password){
     socket.username = username;
 
-    users[socket.id] = username;
+    users[socket.id] = {
+      name: username,
+      online: true
+    };
 
-    console.log(username + " joined");
+    socket.emit("loginSuccess", username);
 
-    io.emit("userList", Object.values(users));
-  });
+    io.emit("userList", getUniqueUserList());
+  } else {
+    socket.emit("loginError", "Invalid credentials");
+  }
+});
 
-  // 🔥 JOIN ROOM
+
+
+socket.on("delivered", ({ roomId, id }) => {
+  socket.to(roomId).emit("delivered", id);
+});
+
+socket.on("seen", ({ roomId, id }) => {
+  socket.to(roomId).emit("seen", id);
+});
+
+  // JOIN ROOM
   socket.on("joinRoom", (roomId) => {
     socket.join(roomId);
     console.log(socket.username + " joined room: " + roomId);
   });
 
-  // 🔥 CHAT MESSAGE
-  socket.on("chat message", async ({ msg, roomId }) => {
+  //  TYPING START
+socket.on("typing", (roomId) => {
+  socket.to(roomId).emit("typing", socket.username);
+});
+
+//  TYPING STOP
+socket.on("stopTyping", (roomId) => {
+  socket.to(roomId).emit("stopTyping");
+});
+
+  //  CHAT MESSAGE
+ socket.on("chat message", async ({ msg, roomId, id }) => {
 
     if (!msg || msg.trim() === "") return;
 
@@ -43,7 +121,8 @@ io.on("connection", (socket) => {
         user: socket.username || "Anonymous",
         original: msg,
         translated: translated || msg,
-        suggestion: "AI disabled"
+        suggestion: "AI disabled",
+        id: id
       });
 
     } catch (error) {
@@ -58,13 +137,16 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 🔥 USER DISCONNECT
+  // USER DISCONNECT
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
 
-    delete users[socket.id];
+    // Remove disconnected socket
+    if (users[socket.id]) {
+      delete users[socket.id];
+    }
 
-    io.emit("userList", Object.values(users));
+    io.emit("userList", getUniqueUserList());
   });
 });
 
@@ -89,9 +171,10 @@ async function translateMessage(text) {
   }
 }
 
+app.use(cors());
 app.use(express.static("public"));
 
-// ✅ UPDATED (IMPORTANT)
+// UPDATED (IMPORTANT)
 server.listen(PORT, () => {
   console.log("Server running on port " + PORT + " 🚀");
 });

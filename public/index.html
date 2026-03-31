@@ -13,19 +13,50 @@
     <p>Welcome back 👋</p>
 
     <input id="username" placeholder="Enter username">
+    <input id="password" type="password" placeholder="Enter password">
     <button onclick="login()">Login</button>
+    <button onclick="register()">Register</button>
   </div>
 </div>
 
+<script src="/socket.io/socket.io.js"></script>
 <script>
+const socket = io();
+
 function login(){
   let username = document.getElementById("username").value;
+  let password = document.getElementById("password").value;
 
-  if(username.trim() === "") return;
+  if(username.trim() === "" || password.trim() === "") return;
 
+  socket.emit("login", { username, password });
+}
+
+function register(){
+  let username = document.getElementById("username").value;
+  let password = document.getElementById("password").value;
+
+  if(username.trim() === "" || password.trim() === "") return;
+
+  socket.emit("register", { username, password });
+}
+
+socket.on("loginError", (msg) => {
+  alert(msg);
+});
+
+socket.on("loginSuccess", (username) => {
   localStorage.setItem("username", username);
   window.location.href = "chat.html";
-}
+});
+
+socket.on("registerError", (msg) => {
+  alert(msg);
+});
+
+socket.on("registerSuccess", (msg) => {
+  alert(msg);
+});
 </script>
 
 </body>
