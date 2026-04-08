@@ -45,7 +45,50 @@
 <script src="/socket.io/socket.io.js"></script>
 
 <script>
-const socket = io();
+// Wait for DOM to be fully loaded before initializing
+document.addEventListener('DOMContentLoaded', function() {
+  console.log("DOM loaded, initializing chat app");
+
+  // Check if socket.io is available
+  if (typeof io === 'undefined') {
+    console.error("Socket.io not loaded!");
+    alert("Socket.io library not loaded. Please refresh the page.");
+    return;
+  }
+
+  const socket = io();
+
+  // Socket connection error handling
+  socket.on('connect', () => {
+    console.log('Connected to server');
+  });
+
+  socket.on('disconnect', (reason) => {
+    console.log('Disconnected from server:', reason);
+  });
+
+  socket.on('connect_error', (error) => {
+    console.error('Connection error:', error);
+    alert('Failed to connect to server. Please check your internet connection.');
+  });
+
+  // Check if required DOM elements exist
+  const requiredElements = ['users', 'messages', 'msg', 'callInterface', 'callTitle', 'callMessage', 'callerName', 'acceptCallBtn'];
+  const missingElements = requiredElements.filter(id => !document.getElementById(id));
+
+  if (missingElements.length > 0) {
+    console.error('Missing DOM elements:', missingElements);
+    alert('Some required page elements are missing. Please refresh the page.');
+    return;
+  }
+
+  console.log('All required DOM elements found');
+
+  isInitialized = true;
+  console.log('Chat app initialization complete');
+
+  // Enable call buttons now that we're initialized
+  updateCallButtonStates();
 
 // username login page se ayega
 let username = localStorage.getItem("username");
@@ -61,6 +104,7 @@ let peerConnection;
 let isCaller = false;
 let currentCallUser = null;
 let currentCallType = null;
+let isInitialized = false;
 
 // STUN servers for WebRTC
 const configuration = {
@@ -118,7 +162,8 @@ socket.on("userList", function(users){
 
   });
 
-});
+  // Update call button states after rendering user list
+  updateCallButtonStates();
 
 let typingTimeout;
 
@@ -164,17 +209,25 @@ socket.on("incomingCall", (data) => {
   currentCallType = data.type;
   isCaller = false;
 
-  document.getElementById("callInterface").style.display = "flex";
-  document.getElementById("callTitle").textContent = "Incoming Call";
-  document.getElementById("callMessage").textContent = `${data.type} call`;
-  document.getElementById("callerName").textContent = data.from;
-  document.getElementById("acceptCallBtn").style.display = "block";
+  const callInterface = document.getElementById("callInterface");
+  const callTitle = document.getElementById("callTitle");
+  const callMessage = document.getElementById("callMessage");
+  const callerName = document.getElementById("callerName");
+  const acceptCallBtn = document.getElementById("acceptCallBtn");
+
+  if (callInterface) callInterface.style.display = "flex";
+  if (callTitle) callTitle.textContent = "Incoming Call";
+  if (callMessage) callMessage.textContent = `${data.type} call`;
+  if (callerName) callerName.textContent = data.from;
+  if (acceptCallBtn) acceptCallBtn.style.display = "block";
 });
 
 socket.on("callAccepted", (data) => {
   console.log("Call accepted by:", data.from);
-  document.getElementById("callTitle").textContent = "Ringing...";
-  document.getElementById("callMessage").textContent = "Connecting call";
+  const callTitle = document.getElementById("callTitle");
+  const callMessage = document.getElementById("callMessage");
+  if (callTitle) callTitle.textContent = "Ringing...";
+  if (callMessage) callMessage.textContent = "Connecting call";
 });
 
 socket.on("callEnded", () => {
@@ -264,11 +317,19 @@ function startChat(otherUser){
 // Call functions
 function startVoiceCall(user, event) {
   event.stopPropagation();
+  if (!isInitialized) {
+    console.error("App not initialized yet");
+    return;
+  }
   initiateCall(user, 'voice');
 }
 
 function startVideoCall(user, event) {
   event.stopPropagation();
+  if (!isInitialized) {
+    console.error("App not initialized yet");
+    return;
+  }
   initiateCall(user, 'video');
 }
 
@@ -285,11 +346,25 @@ function initiateCall(user, type) {
   isCaller = true;
 
   // Show call interface
-  document.getElementById("callInterface").style.display = "flex";
-  document.getElementById("callTitle").textContent = `Calling ${user}...`;
-  document.getElementById("callMessage").textContent = `${type} call`;
-  document.getElementById("callerName").textContent = user;
-  document.getElementById("acceptCallBtn").style.display = "none";
+  const callInterface = document.getElementById("callInterface");
+  const callTitle = document.getElementById("callTitle");
+  const callMessage = document.getElementById("callMessage");
+  const callerName = document.getElementById("callerName");
+  const acceptCallBtn = document.getElementById("acceptCallBtn");
+
+  console.log("DOM elements check:", {
+    callInterface: !!callInterface,
+    callTitle: !!callTitle,
+    callMessage: !!callMessage,
+    callerName: !!callerName,
+    acceptCallBtn: !!acceptCallBtn
+  });
+
+  if (callInterface) callInterface.style.display = "flex";
+  if (callTitle) callTitle.textContent = `Calling ${user}...`;
+  if (callMessage) callMessage.textContent = `${type} call`;
+  if (callerName) callerName.textContent = user;
+  if (acceptCallBtn) acceptCallBtn.style.display = "none";
 
   // Start WebRTC
   startWebRTC(type === 'video');
@@ -327,8 +402,10 @@ function startWebRTC(withVideo = false) {
       remoteStream = event.streams[0];
       // In a real app, you'd display the remote video/audio here
       console.log("Remote stream received, call connected!");
-      document.getElementById("callTitle").textContent = "Connected";
-      document.getElementById("callMessage").textContent = "Call in progress";
+      const callTitle = document.getElementById("callTitle");
+      const callMessage = document.getElementById("callMessage");
+      if (callTitle) callTitle.textContent = "Connected";
+      if (callMessage) callMessage.textContent = "Call in progress";
     };
 
     // Handle ICE candidates
@@ -383,9 +460,13 @@ function acceptCall() {
   console.log("Accepting call from:", currentCallUser, "type:", currentCallType);
 
   // Hide accept button
-  document.getElementById("acceptCallBtn").style.display = "none";
-  document.getElementById("callTitle").textContent = "Connecting...";
-  document.getElementById("callMessage").textContent = "Setting up call";
+  const acceptCallBtn = document.getElementById("acceptCallBtn");
+  const callTitle = document.getElementById("callTitle");
+  const callMessage = document.getElementById("callMessage");
+
+  if (acceptCallBtn) acceptCallBtn.style.display = "none";
+  if (callTitle) callTitle.textContent = "Connecting...";
+  if (callMessage) callMessage.textContent = "Setting up call";
 
   // Start WebRTC for receiver
   startWebRTC(currentCallType === 'video');
@@ -494,6 +575,15 @@ socket.on("seen", function(id){
   let el = document.getElementById("status-" + id);
   if(el) el.innerHTML = '<i class="fas fa-check-double" style="color:#10b981;"></i>';
 });
+
+}); // End of DOMContentLoaded
+
+function updateCallButtonStates() {
+  const callButtons = document.querySelectorAll('.call-btn');
+  callButtons.forEach(button => {
+    button.disabled = !isInitialized;
+  });
+}
 
 </script>
 

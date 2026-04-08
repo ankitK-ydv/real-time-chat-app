@@ -141,6 +141,18 @@ body {
   transform: scale(1.05);
 }
 
+.call-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.call-btn:disabled:hover {
+  transform: none;
+  box-shadow: none;
+  background: inherit;
+}
+
 /* typing indicator */
 #typing {
   min-height: 0;
