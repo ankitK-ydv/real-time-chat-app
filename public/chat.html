@@ -60,6 +60,7 @@ let remoteStream;
 let peerConnection;
 let isCaller = false;
 let currentCallUser = null;
+let currentCallType = null;
 
 // STUN servers for WebRTC
 const configuration = {
@@ -72,6 +73,11 @@ const configuration = {
 // ❌ agar direct chat page open kare
 if(!username){
   window.location.href = "index.html";
+}
+
+// Check WebRTC support
+if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+  alert("WebRTC is not supported in this browser. Please use a modern browser like Chrome, Firefox, or Edge.");
 }
 
 // Authenticate socket with username
@@ -146,7 +152,16 @@ socket.on("stopTyping", function(){
 
 // Socket event handlers for calls
 socket.on("incomingCall", (data) => {
+  console.log("Incoming call from:", data.from, "type:", data.type);
+
+  if (peerConnection) {
+    // Already in a call, reject
+    socket.emit("callRejected", { to: data.from });
+    return;
+  }
+
   currentCallUser = data.from;
+  currentCallType = data.type;
   isCaller = false;
 
   document.getElementById("callInterface").style.display = "flex";
@@ -157,36 +172,69 @@ socket.on("incomingCall", (data) => {
 });
 
 socket.on("callAccepted", (data) => {
-  acceptCall();
+  console.log("Call accepted by:", data.from);
+  document.getElementById("callTitle").textContent = "Ringing...";
+  document.getElementById("callMessage").textContent = "Connecting call";
 });
 
 socket.on("callEnded", () => {
+  console.log("Call ended");
+  endCall();
+});
+
+socket.on("callRejected", () => {
+  console.log("Call rejected");
+  alert("Call was rejected");
   endCall();
 });
 
 socket.on("iceCandidate", (data) => {
+  console.log("Received ICE candidate");
   if (peerConnection) {
-    peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+    peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate))
+      .catch(error => console.error("Error adding ICE candidate:", error));
   }
 });
 
 socket.on("callOffer", (data) => {
-  if (!isCaller && peerConnection) {
+  console.log("Received call offer from:", data.from, "with SDP:", !!data.sdp);
+
+  if (isCaller || !peerConnection) {
+    console.log("Ignoring call offer - either caller or no peer connection yet");
+    return;
+  }
+
+  // This is for when we receive an offer with SDP (after media is ready)
+  if (data.sdp && peerConnection) {
+    console.log("Setting remote description from offer");
     peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp))
-      .then(() => peerConnection.createAnswer())
-      .then(answer => peerConnection.setLocalDescription(answer))
       .then(() => {
+        console.log("Creating answer");
+        return peerConnection.createAnswer();
+      })
+      .then(answer => {
+        console.log("Setting local description");
+        return peerConnection.setLocalDescription(answer);
+      })
+      .then(() => {
+        console.log("Sending answer");
         socket.emit("callAnswer", {
           to: data.from,
           sdp: peerConnection.localDescription
         });
+      })
+      .catch(error => {
+        console.error("Error handling call offer:", error);
+        endCall();
       });
   }
 });
 
 socket.on("callAnswer", (data) => {
-  if (isCaller && peerConnection) {
-    peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+  console.log("Received call answer");
+  if (isCaller && peerConnection && data.sdp) {
+    peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp))
+      .catch(error => console.error("Error setting remote description:", error));
   }
 });
 
@@ -225,7 +273,15 @@ function startVideoCall(user, event) {
 }
 
 function initiateCall(user, type) {
+  if (peerConnection) {
+    alert("You're already in a call!");
+    return;
+  }
+
+  console.log("Initiating call to:", user, "type:", type);
+
   currentCallUser = user;
+  currentCallType = type;
   isCaller = true;
 
   // Show call interface
@@ -237,40 +293,48 @@ function initiateCall(user, type) {
 
   // Start WebRTC
   startWebRTC(type === 'video');
-
-  // Send call offer
-  socket.emit("callOffer", {
-    to: user,
-    from: username,
-    type: type
-  });
 }
 
 function startWebRTC(withVideo = false) {
+  console.log("Starting WebRTC with video:", withVideo);
+
+  // Check if already have a peer connection
+  if (peerConnection) {
+    console.log("Peer connection already exists");
+    return;
+  }
+
   navigator.mediaDevices.getUserMedia({
     audio: true,
     video: withVideo
   }).then(stream => {
+    console.log("Got media stream, tracks:", stream.getTracks().length);
     localStream = stream;
 
     // Create peer connection
     peerConnection = new RTCPeerConnection(configuration);
+    console.log("Created peer connection");
 
     // Add local stream
     localStream.getTracks().forEach(track => {
+      console.log("Adding track:", track.kind);
       peerConnection.addTrack(track, localStream);
     });
 
     // Handle remote stream
     peerConnection.ontrack = event => {
+      console.log("Received remote stream with tracks:", event.streams[0].getTracks().length);
       remoteStream = event.streams[0];
       // In a real app, you'd display the remote video/audio here
-      console.log("Received remote stream");
+      console.log("Remote stream received, call connected!");
+      document.getElementById("callTitle").textContent = "Connected";
+      document.getElementById("callMessage").textContent = "Call in progress";
     };
 
     // Handle ICE candidates
     peerConnection.onicecandidate = event => {
       if (event.candidate) {
+        console.log("Sending ICE candidate");
         socket.emit("iceCandidate", {
           to: currentCallUser,
           candidate: event.candidate
@@ -278,34 +342,64 @@ function startWebRTC(withVideo = false) {
       }
     };
 
+    // Handle connection state changes
+    peerConnection.onconnectionstatechange = () => {
+      console.log("Connection state:", peerConnection.connectionState);
+    };
+
+    // Handle ICE connection state changes
+    peerConnection.oniceconnectionstatechange = () => {
+      console.log("ICE connection state:", peerConnection.iceConnectionState);
+    };
+
     // Create offer if caller
     if (isCaller) {
+      console.log("Creating offer as caller");
       peerConnection.createOffer().then(offer => {
+        console.log("Created offer, setting local description");
         return peerConnection.setLocalDescription(offer);
       }).then(() => {
+        console.log("Sending call offer with SDP");
         socket.emit("callOffer", {
           to: currentCallUser,
           from: username,
+          type: currentCallType,
           sdp: peerConnection.localDescription
         });
+      }).catch(error => {
+        console.error("Error creating offer:", error);
+        alert("Failed to create call offer: " + error.message);
+        endCall();
       });
     }
   }).catch(error => {
     console.error("Error accessing media devices:", error);
-    alert("Could not access camera/microphone");
+    alert("Could not access camera/microphone. Please check permissions and try again.\nError: " + error.message);
     endCall();
   });
 }
 
 function acceptCall() {
-  document.getElementById("callTitle").textContent = "Connected";
-  document.getElementById("callMessage").textContent = "Call in progress";
+  console.log("Accepting call from:", currentCallUser, "type:", currentCallType);
 
-  // In a real app, you'd handle the call acceptance here
-  console.log("Call accepted");
+  // Hide accept button
+  document.getElementById("acceptCallBtn").style.display = "none";
+  document.getElementById("callTitle").textContent = "Connecting...";
+  document.getElementById("callMessage").textContent = "Setting up call";
+
+  // Start WebRTC for receiver
+  startWebRTC(currentCallType === 'video');
+
+  // Notify caller that call was accepted
+  socket.emit("callAccepted", {
+    to: currentCallUser,
+    from: username
+  });
 }
 
 function endCall() {
+  console.log("Ending call");
+
   document.getElementById("callInterface").style.display = "none";
 
   // Stop media streams
@@ -323,6 +417,7 @@ function endCall() {
   remoteStream = null;
   peerConnection = null;
   currentCallUser = null;
+  currentCallType = null;
   isCaller = false;
 
   socket.emit("endCall", { to: currentCallUser });

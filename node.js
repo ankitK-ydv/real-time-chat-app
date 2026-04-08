@@ -95,13 +95,33 @@ socket.on("seen", ({ roomId, id }) => {
 
 // Call signaling
 socket.on("callOffer", (data) => {
+  console.log("Call offer from", data.from, "to", data.to, "with SDP:", !!data.sdp);
+  // Send both incomingCall notification and the actual offer with SDP
   socket.to(data.to).emit("incomingCall", {
     from: data.from,
     type: data.type
   });
+
+  // Send the offer with SDP separately
+  socket.to(data.to).emit("callOffer", {
+    from: data.from,
+    type: data.type,
+    sdp: data.sdp
+  });
+});
+
+socket.on("callAccepted", (data) => {
+  console.log("Call accepted by", data.from);
+  socket.to(data.to).emit("callAccepted", data);
+});
+
+socket.on("callRejected", (data) => {
+  console.log("Call rejected by", data.from);
+  socket.to(data.to).emit("callRejected", data);
 });
 
 socket.on("callAnswer", (data) => {
+  console.log("Call answer from", data.from, "to", data.to);
   socket.to(data.to).emit("callAnswer", data);
 });
 
@@ -110,6 +130,7 @@ socket.on("iceCandidate", (data) => {
 });
 
 socket.on("endCall", (data) => {
+  console.log("Call ended by", socket.username);
   socket.to(data.to).emit("callEnded");
 });
 
