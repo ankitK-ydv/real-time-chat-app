@@ -93,6 +93,26 @@ socket.on("seen", ({ roomId, id }) => {
   socket.to(roomId).emit("seen", id);
 });
 
+// Call signaling
+socket.on("callOffer", (data) => {
+  socket.to(data.to).emit("incomingCall", {
+    from: data.from,
+    type: data.type
+  });
+});
+
+socket.on("callAnswer", (data) => {
+  socket.to(data.to).emit("callAnswer", data);
+});
+
+socket.on("iceCandidate", (data) => {
+  socket.to(data.to).emit("iceCandidate", data);
+});
+
+socket.on("endCall", (data) => {
+  socket.to(data.to).emit("callEnded");
+});
+
   // JOIN ROOM
   socket.on("joinRoom", (roomId) => {
     socket.join(roomId);
@@ -156,18 +176,22 @@ async function translateMessage(text) {
     const res = await axios.post(
       "https://libretranslate.de/translate",
       {
+        
         q: text,
         source: "auto",
         target: "en",
         format: "text"
+
       }
     );
 
     return res.data.translatedText || text;
 
   } catch (err) {
+
     console.error("Translation API Error:", err.message);
     return text;
+
   }
 }
 
@@ -177,4 +201,5 @@ app.use(express.static("public"));
 // UPDATED (IMPORTANT)
 server.listen(PORT, () => {
   console.log("Server running on port " + PORT + " 🚀");
+
 });

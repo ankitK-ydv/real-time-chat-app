@@ -4,6 +4,7 @@
 <title>Chat App</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 
 <body>
@@ -11,16 +12,32 @@
 <div class="chat-container">
   <div class="app-shell">
     <div id="users" class="sidebar">
-      <div class="header">💬 Online Users</div>
+      <div class="header"><i class="fas fa-users"></i> Online Users</div>
     </div>
     <div class="chat-panel">
-      <div class="header">Chat</div>
-      <div id="typing" style="color:gray; padding-left:10px;"></div>
+      <div class="header"><i class="fas fa-comments"></i> Chat</div>
+      <div id="typing" style="color:#6b7280; padding-left:20px;"></div>
       <div class="messages" id="messages"></div>
       <div class="input-box">
-        <input id="msg" placeholder="Type a message" oninput="typingHandler()" onkeypress="handleKeyPress(event)">
-        <button onclick="send()">Send</button>
+        <input id="msg" placeholder="Type a message..." oninput="typingHandler()" onkeypress="handleKeyPress(event)">
+        <button onclick="send()"><i class="fas fa-paper-plane"></i> Send</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Call Interface -->
+<div class="call-interface" id="callInterface">
+  <div class="call-container">
+    <h3 id="callTitle">Incoming Call</h3>
+    <p id="callMessage">from <span id="callerName"></span></p>
+    <div class="call-buttons-large">
+      <button class="call-btn-large end-call" onclick="endCall()">
+        <i class="fas fa-phone-slash"></i> End Call
+      </button>
+      <button class="call-btn-large accept-call" id="acceptCallBtn" onclick="acceptCall()">
+        <i class="fas fa-phone"></i> Accept
+      </button>
     </div>
   </div>
 </div>
@@ -36,6 +53,21 @@ let username = localStorage.getItem("username");
 // current room variable
 let currentRoom = "";
 let activeUserElement = null;
+
+// WebRTC variables
+let localStream;
+let remoteStream;
+let peerConnection;
+let isCaller = false;
+let currentCallUser = null;
+
+// STUN servers for WebRTC
+const configuration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ]
+};
 
 // ❌ agar direct chat page open kare
 if(!username){
@@ -54,18 +86,26 @@ socket.on("userList", function(users){
 
   let usersDiv = document.getElementById("users");
 
-  usersDiv.innerHTML = "<b>💭 Online Users</b><br>";
+  usersDiv.innerHTML = "<b><i class='fas fa-users'></i> Online Users</b><br>";
 
   users.forEach(user => {
 
     if(user.name !== username){
 
-      let statusColor = user.online ? "green" : "gray";
+      let statusColor = user.online ? "#10b981" : "#6b7280";
 
       usersDiv.innerHTML += `
         <div class="user-item" data-user="${user.name}" onclick="startChat('${user.name}')">
-          <span class="status-dot" style="color:${statusColor}; font-size: 12px;">●</span> 
+          <span class="status-dot" style="color:${statusColor}; font-size: 8px;">●</span> 
           <span>${user.name}</span>
+          <div class="call-buttons">
+            <button class="call-btn voice-call" onclick="startVoiceCall('${user.name}', event)">
+              <i class="fas fa-phone"></i>
+            </button>
+            <button class="call-btn video-call" onclick="startVideoCall('${user.name}', event)">
+              <i class="fas fa-video"></i>
+            </button>
+          </div>
         </div>
       `;
     }
@@ -104,6 +144,51 @@ socket.on("stopTyping", function(){
   document.getElementById("typing").innerText = "";
 });
 
+// Socket event handlers for calls
+socket.on("incomingCall", (data) => {
+  currentCallUser = data.from;
+  isCaller = false;
+
+  document.getElementById("callInterface").style.display = "flex";
+  document.getElementById("callTitle").textContent = "Incoming Call";
+  document.getElementById("callMessage").textContent = `${data.type} call`;
+  document.getElementById("callerName").textContent = data.from;
+  document.getElementById("acceptCallBtn").style.display = "block";
+});
+
+socket.on("callAccepted", (data) => {
+  acceptCall();
+});
+
+socket.on("callEnded", () => {
+  endCall();
+});
+
+socket.on("iceCandidate", (data) => {
+  if (peerConnection) {
+    peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+  }
+});
+
+socket.on("callOffer", (data) => {
+  if (!isCaller && peerConnection) {
+    peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp))
+      .then(() => peerConnection.createAnswer())
+      .then(answer => peerConnection.setLocalDescription(answer))
+      .then(() => {
+        socket.emit("callAnswer", {
+          to: data.from,
+          sdp: peerConnection.localDescription
+        });
+      });
+  }
+});
+
+socket.on("callAnswer", (data) => {
+  if (isCaller && peerConnection) {
+    peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+  }
+});
 
 // 🔥 NEW: start private chat
 function startChat(otherUser){
@@ -126,6 +211,121 @@ function startChat(otherUser){
   }
 
   console.log("Chat with:", otherUser);
+}
+
+// Call functions
+function startVoiceCall(user, event) {
+  event.stopPropagation();
+  initiateCall(user, 'voice');
+}
+
+function startVideoCall(user, event) {
+  event.stopPropagation();
+  initiateCall(user, 'video');
+}
+
+function initiateCall(user, type) {
+  currentCallUser = user;
+  isCaller = true;
+
+  // Show call interface
+  document.getElementById("callInterface").style.display = "flex";
+  document.getElementById("callTitle").textContent = `Calling ${user}...`;
+  document.getElementById("callMessage").textContent = `${type} call`;
+  document.getElementById("callerName").textContent = user;
+  document.getElementById("acceptCallBtn").style.display = "none";
+
+  // Start WebRTC
+  startWebRTC(type === 'video');
+
+  // Send call offer
+  socket.emit("callOffer", {
+    to: user,
+    from: username,
+    type: type
+  });
+}
+
+function startWebRTC(withVideo = false) {
+  navigator.mediaDevices.getUserMedia({
+    audio: true,
+    video: withVideo
+  }).then(stream => {
+    localStream = stream;
+
+    // Create peer connection
+    peerConnection = new RTCPeerConnection(configuration);
+
+    // Add local stream
+    localStream.getTracks().forEach(track => {
+      peerConnection.addTrack(track, localStream);
+    });
+
+    // Handle remote stream
+    peerConnection.ontrack = event => {
+      remoteStream = event.streams[0];
+      // In a real app, you'd display the remote video/audio here
+      console.log("Received remote stream");
+    };
+
+    // Handle ICE candidates
+    peerConnection.onicecandidate = event => {
+      if (event.candidate) {
+        socket.emit("iceCandidate", {
+          to: currentCallUser,
+          candidate: event.candidate
+        });
+      }
+    };
+
+    // Create offer if caller
+    if (isCaller) {
+      peerConnection.createOffer().then(offer => {
+        return peerConnection.setLocalDescription(offer);
+      }).then(() => {
+        socket.emit("callOffer", {
+          to: currentCallUser,
+          from: username,
+          sdp: peerConnection.localDescription
+        });
+      });
+    }
+  }).catch(error => {
+    console.error("Error accessing media devices:", error);
+    alert("Could not access camera/microphone");
+    endCall();
+  });
+}
+
+function acceptCall() {
+  document.getElementById("callTitle").textContent = "Connected";
+  document.getElementById("callMessage").textContent = "Call in progress";
+
+  // In a real app, you'd handle the call acceptance here
+  console.log("Call accepted");
+}
+
+function endCall() {
+  document.getElementById("callInterface").style.display = "none";
+
+  // Stop media streams
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+  }
+
+  // Close peer connection
+  if (peerConnection) {
+    peerConnection.close();
+  }
+
+  // Reset variables
+  localStream = null;
+  remoteStream = null;
+  peerConnection = null;
+  currentCallUser = null;
+  isCaller = false;
+
+  socket.emit("endCall", { to: currentCallUser });
 }
 
 function send(){
@@ -175,12 +375,12 @@ socket.emit("seen", {
 
  div.innerHTML = `
   <div id="msg-${data.id}">
-    <div>${data.user}</div>
+    <div><strong>${data.user}</strong></div>
     <div>${data.original}</div>
     ${data.translated && data.translated !== data.original 
-      ? `<small>🌐 ${data.translated}</small>` 
+      ? `<small><i class="fas fa-globe"></i> ${data.translated}</small>` 
       : ""}
-    <small id="status-${data.id}">✔</small>
+    <small id="status-${data.id}" style="float:right;"><i class="fas fa-check"></i></small>
   </div>
 `;
 
@@ -192,12 +392,12 @@ socket.emit("seen", {
 
 socket.on("delivered", function(id){
   let el = document.getElementById("status-" + id);
-  if(el) el.innerText = "✔✔";
+  if(el) el.innerHTML = '<i class="fas fa-check-double"></i>';
 });
 
 socket.on("seen", function(id){
   let el = document.getElementById("status-" + id);
-  if(el) el.innerText = "viewed";
+  if(el) el.innerHTML = '<i class="fas fa-check-double" style="color:#10b981;"></i>';
 });
 
 </script>
