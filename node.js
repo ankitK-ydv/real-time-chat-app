@@ -68,16 +68,7 @@ socket.on("register", ({ username, password }) => {
 socket.on("login", ({ username, password }) => {
 
   if(registeredUsers[username] === password){
-    socket.username = username;
-
-    users[socket.id] = {
-      name: username,
-      online: true
-    };
-
     socket.emit("loginSuccess", username);
-
-    io.emit("userList", getUniqueUserList());
   } else {
     socket.emit("loginError", "Invalid credentials");
   }

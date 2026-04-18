@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>Chat App</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="stylesheet" href="style.css?v=2">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <title>Chat App</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 
 <body>
@@ -26,7 +26,6 @@
   </div>
 </div>
 
-<!-- Call Interface -->
 <div class="call-interface" id="callInterface">
   <div class="call-container">
     <h3 id="callTitle">Incoming Call</h3>
@@ -43,61 +42,14 @@
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
-
 <script>
-// Wait for DOM to be fully loaded before initializing
-document.addEventListener('DOMContentLoaded', function() {
-  console.log("DOM loaded, initializing chat app");
+const socket = io();
 
-  // Check if socket.io is available
-  if (typeof io === 'undefined') {
-    console.error("Socket.io not loaded!");
-    alert("Socket.io library not loaded. Please refresh the page.");
-    return;
-  }
-
-  const socket = io();
-
-  // Socket connection error handling
-  socket.on('connect', () => {
-    console.log('Connected to server');
-  });
-
-  socket.on('disconnect', (reason) => {
-    console.log('Disconnected from server:', reason);
-  });
-
-  socket.on('connect_error', (error) => {
-    console.error('Connection error:', error);
-    alert('Failed to connect to server. Please check your internet connection.');
-  });
-
-  // Check if required DOM elements exist
-  const requiredElements = ['users', 'messages', 'msg', 'callInterface', 'callTitle', 'callMessage', 'callerName', 'acceptCallBtn'];
-  const missingElements = requiredElements.filter(id => !document.getElementById(id));
-
-  if (missingElements.length > 0) {
-    console.error('Missing DOM elements:', missingElements);
-    alert('Some required page elements are missing. Please refresh the page.');
-    return;
-  }
-
-  console.log('All required DOM elements found');
-
-  isInitialized = true;
-  console.log('Chat app initialization complete');
-
-  // Enable call buttons now that we're initialized
-  updateCallButtonStates();
-
-// username login page se ayega
 let username = localStorage.getItem("username");
-
-// current room variable
 let currentRoom = "";
 let activeUserElement = null;
+let typingTimeout;
 
-// WebRTC variables
 let localStream;
 let remoteStream;
 let peerConnection;
@@ -106,47 +58,64 @@ let currentCallUser = null;
 let currentCallType = null;
 let isInitialized = false;
 
-// STUN servers for WebRTC
 const configuration = {
   iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" }
   ]
 };
 
-// ❌ agar direct chat page open kare
-if(!username){
+if (!username) {
   window.location.href = "index.html";
 }
 
-// Check WebRTC support
-if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-  alert("WebRTC is not supported in this browser. Please use a modern browser like Chrome, Firefox, or Edge.");
-}
+socket.on("connect", () => {
+  console.log("Connected to server");
+});
 
-// Authenticate socket with username
-socket.emit("authenticate", username);
+socket.on("disconnect", (reason) => {
+  console.log("Disconnected from server:", reason);
+});
 
-// 🔥 default room (global)
-currentRoom = username + "_global";
-socket.emit("joinRoom", currentRoom);
+socket.on("connect_error", (error) => {
+  console.error("Connection error:", error);
+  alert("Failed to connect to server. Please check your internet connection.");
+});
 
-// 🔥 NEW: user list receive
-socket.on("userList", function(users){
+document.addEventListener("DOMContentLoaded", function() {
+  const requiredElements = ["users", "messages", "msg", "callInterface", "callTitle", "callMessage", "callerName", "acceptCallBtn"];
+  const missingElements = requiredElements.filter(id => !document.getElementById(id));
 
-  let usersDiv = document.getElementById("users");
+  if (missingElements.length > 0) {
+    console.error("Missing DOM elements:", missingElements);
+    alert("Some required page elements are missing. Please refresh the page.");
+    return;
+  }
 
-  usersDiv.innerHTML = "<b><i class='fas fa-users'></i> Online Users</b><br>";
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("WebRTC is not supported in this browser. Please use a modern browser like Chrome, Firefox, or Edge.");
+  }
+
+  isInitialized = true;
+  updateCallButtonStates();
+
+  socket.emit("authenticate", username);
+  currentRoom = username + "_global";
+  socket.emit("joinRoom", currentRoom);
+});
+
+socket.on("userList", function(users) {
+  const usersDiv = document.getElementById("users");
+  if (!usersDiv) return;
+
+  usersDiv.innerHTML = "<div class='header'><i class='fas fa-users'></i> Online Users</div>";
 
   users.forEach(user => {
-
-    if(user.name !== username){
-
-      let statusColor = user.online ? "#10b981" : "#6b7280";
-
+    if (user.name !== username) {
+      const statusColor = user.online ? "#10b981" : "#6b7280";
       usersDiv.innerHTML += `
         <div class="user-item" data-user="${user.name}" onclick="startChat('${user.name}')">
-          <span class="status-dot" style="color:${statusColor}; font-size: 8px;">●</span> 
+          <span class="status-dot" style="color:${statusColor}; font-size: 8px;">?</span>
           <span>${user.name}</span>
           <div class="call-buttons">
             <button class="call-btn voice-call" onclick="startVoiceCall('${user.name}', event)">
@@ -159,49 +128,39 @@ socket.on("userList", function(users){
         </div>
       `;
     }
-
   });
 
-  // Update call button states after rendering user list
   updateCallButtonStates();
+});
 
-let typingTimeout;
-
-function typingHandler(){
+function typingHandler() {
   socket.emit("typing", currentRoom);
-
   clearTimeout(typingTimeout);
-
   typingTimeout = setTimeout(() => {
     socket.emit("stopTyping", currentRoom);
   }, 1000);
 }
 
-function handleKeyPress(event){
-  if(event.key === "Enter") {
+function handleKeyPress(event) {
+  if (event.key === "Enter") {
     event.preventDefault();
     send();
   }
 }
 
-
-socket.on("typing", function(user){
-if(user !== username){
-  document.getElementById("typing").innerText = user + " is typing...";
-}
+socket.on("typing", function(user) {
+  if (user !== username) {
+    document.getElementById("typing").innerText = user + " is typing...";
+  }
 });
 
-socket.on("stopTyping", function(){
+socket.on("stopTyping", function() {
   document.getElementById("typing").innerText = "";
 });
 
-// Socket event handlers for calls
 socket.on("incomingCall", (data) => {
-  console.log("Incoming call from:", data.from, "type:", data.type);
-
   if (peerConnection) {
-    // Already in a call, reject
-    socket.emit("callRejected", { to: data.from });
+    socket.emit("callRejected", { to: data.from, from: username });
     return;
   }
 
@@ -222,8 +181,7 @@ socket.on("incomingCall", (data) => {
   if (acceptCallBtn) acceptCallBtn.style.display = "block";
 });
 
-socket.on("callAccepted", (data) => {
-  console.log("Call accepted by:", data.from);
+socket.on("callAccepted", () => {
   const callTitle = document.getElementById("callTitle");
   const callMessage = document.getElementById("callMessage");
   if (callTitle) callTitle.textContent = "Ringing...";
@@ -231,134 +189,94 @@ socket.on("callAccepted", (data) => {
 });
 
 socket.on("callEnded", () => {
-  console.log("Call ended");
-  endCall();
+  endCall(false);
 });
 
 socket.on("callRejected", () => {
-  console.log("Call rejected");
   alert("Call was rejected");
-  endCall();
+  endCall(false);
 });
 
 socket.on("iceCandidate", (data) => {
-  console.log("Received ICE candidate");
-  if (peerConnection) {
-    peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate))
-      .catch(error => console.error("Error adding ICE candidate:", error));
+  if (peerConnection && data.candidate) {
+    peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(error => {
+      console.error("Error adding ICE candidate:", error);
+    });
   }
 });
 
 socket.on("callOffer", (data) => {
-  console.log("Received call offer from:", data.from, "with SDP:", !!data.sdp);
-
-  if (isCaller || !peerConnection) {
-    console.log("Ignoring call offer - either caller or no peer connection yet");
+  if (isCaller || !peerConnection || !data.sdp) {
     return;
   }
 
-  // This is for when we receive an offer with SDP (after media is ready)
-  if (data.sdp && peerConnection) {
-    console.log("Setting remote description from offer");
-    peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp))
-      .then(() => {
-        console.log("Creating answer");
-        return peerConnection.createAnswer();
-      })
-      .then(answer => {
-        console.log("Setting local description");
-        return peerConnection.setLocalDescription(answer);
-      })
-      .then(() => {
-        console.log("Sending answer");
-        socket.emit("callAnswer", {
-          to: data.from,
-          sdp: peerConnection.localDescription
-        });
-      })
-      .catch(error => {
-        console.error("Error handling call offer:", error);
-        endCall();
+  peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp))
+    .then(() => peerConnection.createAnswer())
+    .then(answer => peerConnection.setLocalDescription(answer))
+    .then(() => {
+      socket.emit("callAnswer", {
+        to: data.from,
+        sdp: peerConnection.localDescription
       });
-  }
+    })
+    .catch(error => {
+      console.error("Error handling call offer:", error);
+      endCall();
+    });
 });
 
 socket.on("callAnswer", (data) => {
-  console.log("Received call answer");
   if (isCaller && peerConnection && data.sdp) {
-    peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp))
-      .catch(error => console.error("Error setting remote description:", error));
+    peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp)).catch(error => {
+      console.error("Error setting remote description:", error);
+    });
   }
 });
 
-// 🔥 NEW: start private chat
-function startChat(otherUser){
+function startChat(otherUser) {
   currentRoom = [username, otherUser].sort().join("_");
-
   socket.emit("joinRoom", currentRoom);
 
   document.getElementById("messages").innerHTML = "";
 
-  // Remove active class from previous user
-  if(activeUserElement) {
+  if (activeUserElement) {
     activeUserElement.classList.remove("active");
   }
 
-  // Add active class to clicked user
   const userElement = document.querySelector(`[data-user="${otherUser}"]`);
-  if(userElement) {
+  if (userElement) {
     userElement.classList.add("active");
     activeUserElement = userElement;
   }
-
-  console.log("Chat with:", otherUser);
 }
 
-// Call functions
 function startVoiceCall(user, event) {
   event.stopPropagation();
-  if (!isInitialized) {
-    console.error("App not initialized yet");
-    return;
-  }
-  initiateCall(user, 'voice');
+  if (!isInitialized) return;
+  initiateCall(user, "voice");
 }
 
 function startVideoCall(user, event) {
   event.stopPropagation();
-  if (!isInitialized) {
-    console.error("App not initialized yet");
-    return;
-  }
-  initiateCall(user, 'video');
+  if (!isInitialized) return;
+  initiateCall(user, "video");
 }
 
 function initiateCall(user, type) {
   if (peerConnection) {
-    alert("You're already in a call!");
+    alert("You are already in a call.");
     return;
   }
-
-  console.log("Initiating call to:", user, "type:", type);
 
   currentCallUser = user;
   currentCallType = type;
   isCaller = true;
 
-  // Show call interface
   const callInterface = document.getElementById("callInterface");
   const callTitle = document.getElementById("callTitle");
   const callMessage = document.getElementById("callMessage");
   const callerName = document.getElementById("callerName");
   const acceptCallBtn = document.getElementById("acceptCallBtn");
-
-  console.log("DOM elements check:", {
-    callInterface: !!callInterface,
-    callTitle: !!callTitle,
-    callMessage: !!callMessage,
-    callerName: !!callerName,
-    acceptCallBtn: !!acceptCallBtn
-  });
 
   if (callInterface) callInterface.style.display = "flex";
   if (callTitle) callTitle.textContent = `Calling ${user}...`;
@@ -366,100 +284,63 @@ function initiateCall(user, type) {
   if (callerName) callerName.textContent = user;
   if (acceptCallBtn) acceptCallBtn.style.display = "none";
 
-  // Start WebRTC
-  startWebRTC(type === 'video');
+  startWebRTC(type === "video");
 }
 
 function startWebRTC(withVideo = false) {
-  console.log("Starting WebRTC with video:", withVideo);
+  if (peerConnection) return;
 
-  // Check if already have a peer connection
-  if (peerConnection) {
-    console.log("Peer connection already exists");
-    return;
-  }
+  navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo })
+    .then(stream => {
+      localStream = stream;
+      peerConnection = new RTCPeerConnection(configuration);
 
-  navigator.mediaDevices.getUserMedia({
-    audio: true,
-    video: withVideo
-  }).then(stream => {
-    console.log("Got media stream, tracks:", stream.getTracks().length);
-    localStream = stream;
-
-    // Create peer connection
-    peerConnection = new RTCPeerConnection(configuration);
-    console.log("Created peer connection");
-
-    // Add local stream
-    localStream.getTracks().forEach(track => {
-      console.log("Adding track:", track.kind);
-      peerConnection.addTrack(track, localStream);
-    });
-
-    // Handle remote stream
-    peerConnection.ontrack = event => {
-      console.log("Received remote stream with tracks:", event.streams[0].getTracks().length);
-      remoteStream = event.streams[0];
-      // In a real app, you'd display the remote video/audio here
-      console.log("Remote stream received, call connected!");
-      const callTitle = document.getElementById("callTitle");
-      const callMessage = document.getElementById("callMessage");
-      if (callTitle) callTitle.textContent = "Connected";
-      if (callMessage) callMessage.textContent = "Call in progress";
-    };
-
-    // Handle ICE candidates
-    peerConnection.onicecandidate = event => {
-      if (event.candidate) {
-        console.log("Sending ICE candidate");
-        socket.emit("iceCandidate", {
-          to: currentCallUser,
-          candidate: event.candidate
-        });
-      }
-    };
-
-    // Handle connection state changes
-    peerConnection.onconnectionstatechange = () => {
-      console.log("Connection state:", peerConnection.connectionState);
-    };
-
-    // Handle ICE connection state changes
-    peerConnection.oniceconnectionstatechange = () => {
-      console.log("ICE connection state:", peerConnection.iceConnectionState);
-    };
-
-    // Create offer if caller
-    if (isCaller) {
-      console.log("Creating offer as caller");
-      peerConnection.createOffer().then(offer => {
-        console.log("Created offer, setting local description");
-        return peerConnection.setLocalDescription(offer);
-      }).then(() => {
-        console.log("Sending call offer with SDP");
-        socket.emit("callOffer", {
-          to: currentCallUser,
-          from: username,
-          type: currentCallType,
-          sdp: peerConnection.localDescription
-        });
-      }).catch(error => {
-        console.error("Error creating offer:", error);
-        alert("Failed to create call offer: " + error.message);
-        endCall();
+      localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
       });
-    }
-  }).catch(error => {
-    console.error("Error accessing media devices:", error);
-    alert("Could not access camera/microphone. Please check permissions and try again.\nError: " + error.message);
-    endCall();
-  });
+
+      peerConnection.ontrack = event => {
+        remoteStream = event.streams[0];
+        const callTitle = document.getElementById("callTitle");
+        const callMessage = document.getElementById("callMessage");
+        if (callTitle) callTitle.textContent = "Connected";
+        if (callMessage) callMessage.textContent = "Call in progress";
+      };
+
+      peerConnection.onicecandidate = event => {
+        if (event.candidate) {
+          socket.emit("iceCandidate", {
+            to: currentCallUser,
+            candidate: event.candidate
+          });
+        }
+      };
+
+      if (isCaller) {
+        peerConnection.createOffer()
+          .then(offer => peerConnection.setLocalDescription(offer))
+          .then(() => {
+            socket.emit("callOffer", {
+              to: currentCallUser,
+              from: username,
+              type: currentCallType,
+              sdp: peerConnection.localDescription
+            });
+          })
+          .catch(error => {
+            console.error("Error creating offer:", error);
+            endCall();
+          });
+      }
+    })
+    .catch(error => {
+      console.error("Error accessing media devices:", error);
+      alert("Could not access camera/microphone. Please check permissions.");
+      endCall();
+    });
 }
 
 function acceptCall() {
-  console.log("Accepting call from:", currentCallUser, "type:", currentCallType);
-
-  // Hide accept button
   const acceptCallBtn = document.getElementById("acceptCallBtn");
   const callTitle = document.getElementById("callTitle");
   const callMessage = document.getElementById("callMessage");
@@ -468,32 +349,28 @@ function acceptCall() {
   if (callTitle) callTitle.textContent = "Connecting...";
   if (callMessage) callMessage.textContent = "Setting up call";
 
-  // Start WebRTC for receiver
-  startWebRTC(currentCallType === 'video');
+  startWebRTC(currentCallType === "video");
 
-  // Notify caller that call was accepted
   socket.emit("callAccepted", {
     to: currentCallUser,
-    from: username
+    from: username,
+    type: currentCallType
   });
 }
 
-function endCall() {
-  console.log("Ending call");
+function endCall(shouldNotify = true) {
+  const targetUser = currentCallUser;
 
   document.getElementById("callInterface").style.display = "none";
 
-  // Stop media streams
   if (localStream) {
     localStream.getTracks().forEach(track => track.stop());
   }
 
-  // Close peer connection
   if (peerConnection) {
     peerConnection.close();
   }
 
-  // Reset variables
   localStream = null;
   remoteStream = null;
   peerConnection = null;
@@ -501,25 +378,25 @@ function endCall() {
   currentCallType = null;
   isCaller = false;
 
-  socket.emit("endCall", { to: currentCallUser });
+  if (shouldNotify && targetUser) {
+    socket.emit("endCall", { to: targetUser });
+  }
 }
 
-function send(){
+function send() {
   let msg = document.getElementById("msg").value;
-  if(msg.trim() === "") return;
+  if (msg.trim() === "") return;
 
-  // 🔥 NEW: unique message ID
   const messageId = Date.now();
 
   socket.emit("chat message", {
     msg: msg,
     roomId: currentRoom,
-    id: messageId   // 👈 yaha add kiya
+    id: messageId
   });
 
   document.getElementById("msg").value = "";
 
-  // Add animation to send button
   const sendBtn = document.querySelector(".input-box button");
   sendBtn.style.animation = "none";
   setTimeout(() => {
@@ -527,65 +404,65 @@ function send(){
   }, 10);
 }
 
-socket.on("chat message", function(data){
+socket.on("chat message", function(data) {
   let div = document.createElement("div");
-
   div.classList.add("message");
 
-  if(data.user === username){
+  if (data.user === username) {
     div.classList.add("sent");
   } else {
     div.classList.add("received");
 
-  socket.emit("delivered", {
-  roomId: currentRoom,
-  id: data.id
-});
+    socket.emit("delivered", {
+      roomId: currentRoom,
+      id: data.id
+    });
 
-socket.emit("seen", {
-  roomId: currentRoom,
-  id: data.id
-});
-
+    socket.emit("seen", {
+      roomId: currentRoom,
+      id: data.id
+    });
   }
 
- div.innerHTML = `
-  <div id="msg-${data.id}">
-    <div><strong>${data.user}</strong></div>
-    <div>${data.original}</div>
-    ${data.translated && data.translated !== data.original 
-      ? `<small><i class="fas fa-globe"></i> ${data.translated}</small>` 
-      : ""}
-    <small id="status-${data.id}" style="float:right;"><i class="fas fa-check"></i></small>
-  </div>
-`;
+  div.innerHTML = `
+    <div id="msg-${data.id}">
+      <div><strong>${data.user}</strong></div>
+      <div>${data.original}</div>
+      ${data.translated && data.translated !== data.original ? `<small><i class="fas fa-globe"></i> ${data.translated}</small>` : ""}
+      <small id="status-${data.id}" style="float:right;"><i class="fas fa-check"></i></small>
+    </div>
+  `;
 
-  document.getElementById("messages").appendChild(div);
-
-  document.getElementById("messages").scrollTop =
-    document.getElementById("messages").scrollHeight;
+  const messages = document.getElementById("messages");
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
 });
 
-socket.on("delivered", function(id){
+socket.on("delivered", function(id) {
   let el = document.getElementById("status-" + id);
-  if(el) el.innerHTML = '<i class="fas fa-check-double"></i>';
+  if (el) el.innerHTML = '<i class="fas fa-check-double"></i>';
 });
 
-socket.on("seen", function(id){
+socket.on("seen", function(id) {
   let el = document.getElementById("status-" + id);
-  if(el) el.innerHTML = '<i class="fas fa-check-double" style="color:#10b981;"></i>';
+  if (el) el.innerHTML = '<i class="fas fa-check-double" style="color:#10b981;"></i>';
 });
-
-}); // End of DOMContentLoaded
 
 function updateCallButtonStates() {
-  const callButtons = document.querySelectorAll('.call-btn');
+  const callButtons = document.querySelectorAll(".call-btn");
   callButtons.forEach(button => {
     button.disabled = !isInitialized;
   });
 }
 
+window.startChat = startChat;
+window.startVoiceCall = startVoiceCall;
+window.startVideoCall = startVideoCall;
+window.acceptCall = acceptCall;
+window.endCall = endCall;
+window.send = send;
+window.typingHandler = typingHandler;
+window.handleKeyPress = handleKeyPress;
 </script>
-
 </body>
 </html>
