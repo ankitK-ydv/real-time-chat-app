@@ -3,20 +3,32 @@
 <head>
   <title>Chat App</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="stylesheet" href="style.css?v=4">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
-
 <body>
 
 <div class="chat-container">
   <div class="app-shell">
     <div id="users" class="sidebar">
-      <div class="header"><i class="fas fa-users"></i> Online Users</div>
+      <div class="header sidebar-header">
+        <span><i class="fas fa-inbox"></i> Inbox</span>
+        <div class="sidebar-header-actions">
+          <button class="home-link-btn" onclick="goHome()"><i class="fas fa-house"></i> Home</button>
+          <button class="profile-open-btn" onclick="openProfile()"><i class="fas fa-user"></i> Profile</button>
+        </div>
+      </div>
+      <div class="sidebar-search-wrap">
+        <input id="userSearch" class="sidebar-search" type="search" placeholder="Search users..." oninput="renderUsers()">
+      </div>
     </div>
     <div class="chat-panel">
-      <div class="header"><i class="fas fa-comments"></i> Chat</div>
+      <div class="header chat-header">
+        <span><i class="fas fa-comments"></i> Chat</span>
+        <button class="home-link-btn chat-home-btn" onclick="goHome()"><i class="fas fa-house"></i> Home</button>
+      </div>
       <div id="typing" style="color:#6b7280; padding-left:20px;"></div>
+      <div id="callNotice" class="call-notice"></div>
       <div class="messages" id="messages"></div>
       <div class="input-box">
         <input id="msg" placeholder="Type a message..." oninput="typingHandler()" onkeypress="handleKeyPress(event)">
@@ -30,6 +42,11 @@
   <div class="call-container">
     <h3 id="callTitle">Incoming Call</h3>
     <p id="callMessage">from <span id="callerName"></span></p>
+    <div class="call-video-area" id="callVideoArea">
+      <video id="remoteVideo" class="remote-video" autoplay playsinline></video>
+      <video id="localVideo" class="local-video" autoplay playsinline muted></video>
+      <div id="callPlaceholder" class="call-placeholder"><i class="fas fa-user"></i></div>
+    </div>
     <div class="call-buttons-large">
       <button class="call-btn-large end-call" onclick="endCall()">
         <i class="fas fa-phone-slash"></i> End Call
@@ -41,14 +58,50 @@
   </div>
 </div>
 
+<div class="profile-modal" id="profileModal">
+  <div class="profile-card">
+    <button class="profile-close" onclick="closeProfile()"><i class="fas fa-times"></i></button>
+    <h3 id="profileTitle">Profile</h3>
+    <div class="profile-avatar-wrap" id="profileAvatarWrap">
+      <img id="profileImage" class="profile-image" alt="Profile Photo">
+      <div id="profileInitial" class="profile-initial">U</div>
+    </div>
+    <p class="profile-name" id="profileName"></p>
+
+    <div id="profileEditor" class="profile-editor">
+      <input type="file" id="profilePhotoInput" accept="image/*">
+      <div class="profile-actions">
+        <button class="profile-btn" onclick="saveProfile()"><i class="fas fa-save"></i> Save Photo</button>
+        <button class="profile-btn danger" onclick="removeProfilePhoto()"><i class="fas fa-trash"></i> Remove</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="/socket.io/socket.io.js"></script>
 <script>
 const socket = io();
 
-let username = localStorage.getItem("username");
+let username = sessionStorage.getItem("username") || localStorage.getItem("username");
 let currentRoom = "";
 let activeUserElement = null;
 let typingTimeout;
+let viewingProfileUser = null;
+let pendingAvatarData = null;
+let myProfile = {
+  username: username || "",
+  avatar: ""
+};
+let latestUsers = [];
+let allUsers = [];
+let homeConnections = [];
+let syncState = {
+  connections: [],
+  incomingRequests: [],
+  outgoingRequests: [],
+  unreadByUser: {}
+};
+let activeChatUser = null;
 
 let localStream;
 let remoteStream;
@@ -57,6 +110,11 @@ let isCaller = false;
 let currentCallUser = null;
 let currentCallType = null;
 let isInitialized = false;
+let pendingOfferData = null;
+let ringTimeoutId = null;
+let hasRequestedInitialData = false;
+
+const RING_TIMEOUT_MS = 30000;
 
 const configuration = {
   iceServers: [
@@ -67,23 +125,35 @@ const configuration = {
 
 if (!username) {
   window.location.href = "index.html";
+} else {
+  sessionStorage.setItem("username", username);
 }
 
-socket.on("connect", () => {
-  console.log("Connected to server");
-});
-
-socket.on("disconnect", (reason) => {
-  console.log("Disconnected from server:", reason);
-});
-
-socket.on("connect_error", (error) => {
-  console.error("Connection error:", error);
-  alert("Failed to connect to server. Please check your internet connection.");
-});
+function goHome() {
+  window.location.href = "home.html";
+}
 
 document.addEventListener("DOMContentLoaded", function() {
-  const requiredElements = ["users", "messages", "msg", "callInterface", "callTitle", "callMessage", "callerName", "acceptCallBtn"];
+  const requiredElements = [
+    "users",
+    "messages",
+    "msg",
+    "callInterface",
+    "callTitle",
+    "callMessage",
+    "callerName",
+    "acceptCallBtn",
+    "callNotice",
+    "remoteVideo",
+    "localVideo",
+    "callPlaceholder",
+    "profileModal",
+    "profileImage",
+    "profileInitial",
+    "profilePhotoInput",
+    "profileName",
+    "profileEditor"
+  ];
   const missingElements = requiredElements.filter(id => !document.getElementById(id));
 
   if (missingElements.length > 0) {
@@ -96,41 +166,156 @@ document.addEventListener("DOMContentLoaded", function() {
     alert("WebRTC is not supported in this browser. Please use a modern browser like Chrome, Firefox, or Edge.");
   }
 
+  localStorage.removeItem("activeChatUser");
+
   isInitialized = true;
   updateCallButtonStates();
 
   socket.emit("authenticate", username);
   currentRoom = username + "_global";
   socket.emit("joinRoom", currentRoom);
+
+  renderUsers();
+  renderEmptyChatState();
+
+  if (!sessionStorage.getItem("pendingChatUser")) {
+    renderEmptyChatState();
+  }
+
+  const photoInput = document.getElementById("profilePhotoInput");
+  photoInput.addEventListener("change", handleProfilePhotoSelection);
+
+  const profileModal = document.getElementById("profileModal");
+  profileModal.addEventListener("click", function(event) {
+    if (event.target === profileModal) {
+      closeProfile();
+    }
+  });
 });
 
 socket.on("userList", function(users) {
-  const usersDiv = document.getElementById("users");
-  if (!usersDiv) return;
+  latestUsers = Array.isArray(users) ? users.filter(user => user.name !== username) : [];
+  renderUsers();
+});
 
-  usersDiv.innerHTML = "<div class='header'><i class='fas fa-users'></i> Online Users</div>";
+socket.on("presenceSnapshot", function(onlineUsers) {
+  const onlineSet = new Set(Array.isArray(onlineUsers) ? onlineUsers : []);
+  latestUsers = latestUsers.map((user) => ({
+    ...user,
+    online: onlineSet.has(user.name)
+  }));
+  allUsers = allUsers.map((user) => ({
+    ...user,
+    online: onlineSet.has(user.name)
+  }));
+  renderUsers();
+});
 
-  users.forEach(user => {
-    if (user.name !== username) {
-      const statusColor = user.online ? "#10b981" : "#6b7280";
-      usersDiv.innerHTML += `
-        <div class="user-item" data-user="${user.name}" onclick="startChat('${user.name}')">
-          <span class="status-dot" style="color:${statusColor}; font-size: 8px;">?</span>
-          <span>${user.name}</span>
-          <div class="call-buttons">
-            <button class="call-btn voice-call" onclick="startVoiceCall('${user.name}', event)">
-              <i class="fas fa-phone"></i>
-            </button>
-            <button class="call-btn video-call" onclick="startVideoCall('${user.name}', event)">
-              <i class="fas fa-video"></i>
-            </button>
-          </div>
-        </div>
-      `;
-    }
+socket.on("authenticated", function() {
+  if (hasRequestedInitialData) return;
+
+  hasRequestedInitialData = true;
+  socket.emit("getProfile", username);
+  socket.emit("fetchHomeData");
+  socket.emit("fetchSyncState");
+  socket.emit("fetchAllUsers");
+});
+
+socket.on("homeData", function(data) {
+  homeConnections = Array.isArray(data?.connections) ? data.connections : [];
+  renderUsers();
+});
+
+socket.on("allUsers", function(users) {
+  allUsers = Array.isArray(users) ? users.filter(user => user.name !== username) : [];
+  renderUsers();
+});
+
+socket.on("syncState", function(data) {
+  syncState = {
+    connections: Array.isArray(data?.connections) ? data.connections.map(normalizeConnectionName).filter(Boolean) : [],
+    incomingRequests: Array.isArray(data?.incomingRequests) ? data.incomingRequests.map(normalizeConnectionName).filter(Boolean) : [],
+    outgoingRequests: Array.isArray(data?.outgoingRequests) ? data.outgoingRequests.map(normalizeConnectionName).filter(Boolean) : [],
+    unreadByUser: typeof data?.unreadByUser === "object" && data.unreadByUser ? data.unreadByUser : {}
+  };
+
+  renderUsers();
+  if (sessionStorage.getItem("pendingChatUser")) {
+    tryAutoOpenPendingChat();
+  }
+});
+
+socket.on("connectionError", function(message) {
+  alert(message || "Connection action failed");
+});
+
+socket.on("conversationError", function(message) {
+  alert(message || "Cannot open chat right now");
+});
+
+socket.on("conversationHistory", function(payload) {
+  if (!payload || payload.otherUser !== activeChatUser) return;
+
+  const messages = document.getElementById("messages");
+  messages.innerHTML = "";
+
+  (payload.messages || []).forEach((item) => {
+    appendMessage(item);
   });
 
-  updateCallButtonStates();
+  messages.scrollTop = messages.scrollHeight;
+});
+
+function tryAutoOpenPendingChat() {
+  const pendingUser = sessionStorage.getItem("pendingChatUser");
+  if (!pendingUser) {
+    if (!activeChatUser) {
+      renderEmptyChatState();
+    }
+    return;
+  }
+
+  if (isConnectedUser(pendingUser)) {
+    sessionStorage.removeItem("pendingChatUser");
+    startChat(pendingUser);
+  } else {
+    sessionStorage.removeItem("pendingChatUser");
+    renderEmptyChatState();
+  }
+}
+
+socket.on("profileData", function(profile) {
+  if (!profile || !profile.username) return;
+
+  if (profile.username === username) {
+    myProfile = {
+      username: profile.username,
+      avatar: profile.avatar || ""
+    };
+  }
+
+  if (viewingProfileUser === profile.username) {
+    const editable = profile.username === username;
+    renderProfileModal(profile, editable);
+    showProfileModal();
+  }
+});
+
+socket.on("profileUpdated", function(profile) {
+  if (!profile || !profile.username) return;
+
+  if (profile.username === username) {
+    myProfile = {
+      username: profile.username,
+      avatar: profile.avatar || ""
+    };
+    pendingAvatarData = null;
+    renderProfileModal(myProfile, true);
+  }
+});
+
+socket.on("profileError", function(message) {
+  alert(message || "Failed to update profile");
 });
 
 function typingHandler() {
@@ -167,6 +352,8 @@ socket.on("incomingCall", (data) => {
   currentCallUser = data.from;
   currentCallType = data.type;
   isCaller = false;
+  pendingOfferData = null;
+  updateCallMediaUI(currentCallType === "video");
 
   const callInterface = document.getElementById("callInterface");
   const callTitle = document.getElementById("callTitle");
@@ -182,19 +369,30 @@ socket.on("incomingCall", (data) => {
 });
 
 socket.on("callAccepted", () => {
+  stopRingTimeout();
   const callTitle = document.getElementById("callTitle");
   const callMessage = document.getElementById("callMessage");
   if (callTitle) callTitle.textContent = "Ringing...";
   if (callMessage) callMessage.textContent = "Connecting call";
 });
 
-socket.on("callEnded", () => {
+socket.on("callEnded", (data) => {
+  stopRingTimeout();
+  if (data && data.reason === "timeout") {
+    showCallNotice(`Missed ${data.type || "voice"} call from ${data.from}`);
+  }
   endCall(false);
 });
 
 socket.on("callRejected", () => {
+  stopRingTimeout();
   alert("Call was rejected");
   endCall(false);
+});
+
+socket.on("missedCall", (data) => {
+  if (!data || !data.from) return;
+  showCallNotice(`Missed ${data.type || "voice"} call from ${data.from}`);
 });
 
 socket.on("iceCandidate", (data) => {
@@ -206,16 +404,33 @@ socket.on("iceCandidate", (data) => {
 });
 
 socket.on("callOffer", (data) => {
-  if (isCaller || !peerConnection || !data.sdp) {
+  if (isCaller || !data || !data.sdp) {
     return;
   }
 
-  peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp))
+  pendingOfferData = data;
+
+  if (!peerConnection) {
+    return;
+  }
+
+  processPendingOffer();
+});
+
+function processPendingOffer() {
+  if (!pendingOfferData || !peerConnection) {
+    return;
+  }
+
+  const offerData = pendingOfferData;
+  pendingOfferData = null;
+
+  peerConnection.setRemoteDescription(new RTCSessionDescription(offerData.sdp))
     .then(() => peerConnection.createAnswer())
     .then(answer => peerConnection.setLocalDescription(answer))
     .then(() => {
       socket.emit("callAnswer", {
-        to: data.from,
+        to: offerData.from,
         sdp: peerConnection.localDescription
       });
     })
@@ -223,9 +438,10 @@ socket.on("callOffer", (data) => {
       console.error("Error handling call offer:", error);
       endCall();
     });
-});
+}
 
 socket.on("callAnswer", (data) => {
+  stopRingTimeout();
   if (isCaller && peerConnection && data.sdp) {
     peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp)).catch(error => {
       console.error("Error setting remote description:", error);
@@ -234,8 +450,16 @@ socket.on("callAnswer", (data) => {
 });
 
 function startChat(otherUser) {
+  const isConnected = isConnectedUser(otherUser);
+  if (!isConnected) {
+    alert("Send connection request first and wait for accept.");
+    return;
+  }
+
+  activeChatUser = otherUser;
   currentRoom = [username, otherUser].sort().join("_");
-  socket.emit("joinRoom", currentRoom);
+  socket.emit("joinConversation", { otherUser });
+  socket.emit("markConversationRead", { otherUser });
 
   document.getElementById("messages").innerHTML = "";
 
@@ -248,29 +472,158 @@ function startChat(otherUser) {
     userElement.classList.add("active");
     activeUserElement = userElement;
   }
+
+  sessionStorage.removeItem("pendingChatUser");
+  localStorage.removeItem("activeChatUser");
+}
+
+function normalizeConnectionName(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "object") {
+    return String(value.username || value.name || "").trim();
+  }
+  return "";
+}
+
+function getConnectedUserSet() {
+  const names = new Set();
+
+  (Array.isArray(syncState.connections) ? syncState.connections : []).forEach((item) => {
+    const name = normalizeConnectionName(item);
+    if (name) names.add(name);
+  });
+
+  (Array.isArray(homeConnections) ? homeConnections : []).forEach((item) => {
+    const name = normalizeConnectionName(item);
+    if (name) names.add(name);
+  });
+
+  return names;
+}
+
+function isConnectedUser(targetUser) {
+  const safeTarget = normalizeConnectionName(targetUser);
+  if (!safeTarget) return false;
+  return getConnectedUserSet().has(safeTarget);
+}
+
+function renderUsers() {
+  const usersDiv = document.getElementById("users");
+  if (!usersDiv) return;
+
+  const searchValue = (document.getElementById("userSearch")?.value || "").trim().toLowerCase();
+
+  const directoryMap = new Map();
+  [...(Array.isArray(allUsers) ? allUsers : []), ...(Array.isArray(latestUsers) ? latestUsers : [])].forEach((user) => {
+    if (!user || !user.name) return;
+
+    const existing = directoryMap.get(user.name) || { name: user.name, online: false, avatar: "" };
+    directoryMap.set(user.name, {
+      ...existing,
+      ...user,
+      online: existing.online || !!user.online
+    });
+  });
+
+  [...syncState.connections, ...syncState.incomingRequests, ...syncState.outgoingRequests].forEach((name) => {
+    if (!name || directoryMap.has(name)) return;
+    directoryMap.set(name, { name, online: false, avatar: "" });
+  });
+
+  const directory = Array.from(directoryMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const onlineMap = new Map(directory.map((user) => [user.name, user]));
+  const connectedFriendNames = new Map();
+  [...syncState.connections, ...homeConnections.map((friend) => friend.username || friend.name || friend.author)].forEach((name) => {
+    if (!name) return;
+    connectedFriendNames.set(name, true);
+  });
+  const connectedFriends = Array.from(connectedFriendNames.keys())
+    .slice()
+    .filter((name) => !searchValue || name.toLowerCase().includes(searchValue))
+    .sort((a, b) => a.localeCompare(b));
+  usersDiv.innerHTML = `<div class='header sidebar-header'><span><i class='fas fa-inbox'></i> Inbox</span><button class='profile-open-btn' onclick='openProfile()'><i class='fas fa-user'></i> Profile</button></div>`;
+
+  usersDiv.innerHTML += `<div class="sidebar-search-wrap"><input id="userSearch" class="sidebar-search" type="search" placeholder="Search friends..." value="${escapeHtml(searchValue)}" oninput="renderUsers()"></div>`;
+
+  usersDiv.innerHTML += `<div class="sidebar-section"><div class="sidebar-section-title"><i class="fas fa-user-friends"></i> Friends</div></div>`;
+
+  if (!connectedFriends.length) {
+    usersDiv.innerHTML += `<div class="empty-sidebar">No matching friends found.</div>`;
+  } else {
+    connectedFriends.forEach((friendName) => {
+      const user = onlineMap.get(friendName) || { name: friendName, online: false, avatar: "" };
+      const unreadCount = syncState.unreadByUser[friendName] || 0;
+      const isActive = activeChatUser === friendName;
+
+      usersDiv.innerHTML += `
+        <div class="user-item ${isActive ? "active" : ""}" data-user="${friendName}" onclick="startChat('${friendName}')">
+          ${getAvatarMarkup(user)}
+          <span class="status-dot ${user.online ? "online-dot" : "offline-dot"}"></span>
+          <div class="user-item-text">
+            <span class="user-name">${friendName}</span>
+            <span class="user-subtext ${user.online ? "online-state" : "offline-state"}">${user.online ? "Online now" : "Offline"}</span>
+          </div>
+          ${unreadCount > 0 ? `<span class="unread-badge">${unreadCount}</span>` : ""}
+          <div class="call-buttons">
+            <button class="call-btn profile-view-btn" onclick="openUserProfile('${friendName}', event)"><i class="fas fa-id-badge"></i></button>
+            <button class="call-btn voice-call" data-offline="${user.online ? "false" : "true"}" onclick="startVoiceCall('${friendName}', event)" ${user.online ? "" : "disabled"}><i class="fas fa-phone"></i></button>
+            <button class="call-btn video-call" data-offline="${user.online ? "false" : "true"}" onclick="startVideoCall('${friendName}', event)" ${user.online ? "" : "disabled"}><i class="fas fa-video"></i></button>
+          </div>
+        </div>
+      `;
+    });
+  }
+
+  updateCallButtonStates();
+}
+
+function sendConnectionRequest(targetUser, event) {
+  event.stopPropagation();
+  socket.emit("sendConnectionRequest", { to: targetUser });
+}
+
+function respondRequest(targetUser, action, event) {
+  if (event) {
+    event.stopPropagation();
+  }
+
+  socket.emit("respondConnectionRequest", { from: targetUser, action });
+  socket.emit("fetchSyncState");
+  socket.emit("fetchAllUsers");
+}
+
+function openChatWithUser(targetUser, event) {
+  if (event) {
+    event.stopPropagation();
+  }
+
+  startChat(targetUser);
 }
 
 function startVoiceCall(user, event) {
-  event.stopPropagation();
+  if (event) event.stopPropagation();
   if (!isInitialized) return;
   initiateCall(user, "voice");
 }
 
 function startVideoCall(user, event) {
-  event.stopPropagation();
+  if (event) event.stopPropagation();
   if (!isInitialized) return;
   initiateCall(user, "video");
 }
 
 function initiateCall(user, type) {
-  if (peerConnection) {
-    alert("You are already in a call.");
+  if (!user || peerConnection) {
+    if (peerConnection) alert("You are already in a call.");
     return;
   }
 
   currentCallUser = user;
   currentCallType = type;
   isCaller = true;
+  pendingOfferData = null;
+  updateCallMediaUI(type === "video");
 
   const callInterface = document.getElementById("callInterface");
   const callTitle = document.getElementById("callTitle");
@@ -284,60 +637,72 @@ function initiateCall(user, type) {
   if (callerName) callerName.textContent = user;
   if (acceptCallBtn) acceptCallBtn.style.display = "none";
 
-  startWebRTC(type === "video");
+  startRingTimeout();
+  startWebRTC(type === "video").catch(() => {
+    // Error handling is centralized inside startWebRTC.
+  });
 }
 
 function startWebRTC(withVideo = false) {
-  if (peerConnection) return;
+  if (peerConnection) return Promise.resolve();
 
-  navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo })
-    .then(stream => {
+  return navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo })
+    .then((stream) => {
       localStream = stream;
       peerConnection = new RTCPeerConnection(configuration);
 
-      localStream.getTracks().forEach(track => {
+      attachLocalStream(stream, withVideo);
+
+      localStream.getTracks().forEach((track) => {
         peerConnection.addTrack(track, localStream);
       });
 
-      peerConnection.ontrack = event => {
+      peerConnection.ontrack = (event) => {
         remoteStream = event.streams[0];
+        attachRemoteStream(remoteStream);
         const callTitle = document.getElementById("callTitle");
         const callMessage = document.getElementById("callMessage");
         if (callTitle) callTitle.textContent = "Connected";
         if (callMessage) callMessage.textContent = "Call in progress";
       };
 
-      peerConnection.onicecandidate = event => {
-        if (event.candidate) {
-          socket.emit("iceCandidate", {
-            to: currentCallUser,
-            candidate: event.candidate
-          });
-        }
+      peerConnection.onicecandidate = (event) => {
+        if (!event.candidate || !currentCallUser) return;
+        socket.emit("iceCandidate", {
+          to: currentCallUser,
+          candidate: event.candidate
+        });
       };
 
-      if (isCaller) {
-        peerConnection.createOffer()
-          .then(offer => peerConnection.setLocalDescription(offer))
-          .then(() => {
-            socket.emit("callOffer", {
-              to: currentCallUser,
-              from: username,
-              type: currentCallType,
-              sdp: peerConnection.localDescription
-            });
-          })
-          .catch(error => {
-            console.error("Error creating offer:", error);
-            endCall();
+      if (!isCaller) return;
+
+      return peerConnection.createOffer()
+        .then((offer) => peerConnection.setLocalDescription(offer))
+        .then(() => {
+          socket.emit("callOffer", {
+            to: currentCallUser,
+            from: username,
+            type: currentCallType,
+            sdp: peerConnection.localDescription
           });
-      }
+        });
     })
-    .catch(error => {
+    .catch((error) => {
       console.error("Error accessing media devices:", error);
       alert("Could not access camera/microphone. Please check permissions.");
-      endCall();
+      endCall(false);
+      throw error;
     });
+}
+
+function escapeHtml(text) {
+  const value = String(text || "");
+  return value.replace(/[&<>"]/g, (ch) => {
+    if (ch === "&") return "&amp;";
+    if (ch === "<") return "&lt;";
+    if (ch === ">") return "&gt;";
+    return "&quot;";
+  });
 }
 
 function acceptCall() {
@@ -349,7 +714,13 @@ function acceptCall() {
   if (callTitle) callTitle.textContent = "Connecting...";
   if (callMessage) callMessage.textContent = "Setting up call";
 
-  startWebRTC(currentCallType === "video");
+  startWebRTC(currentCallType === "video")
+    .then(() => {
+      processPendingOffer();
+    })
+    .catch(() => {
+      // Handled inside startWebRTC
+    });
 
   socket.emit("callAccepted", {
     to: currentCallUser,
@@ -360,8 +731,10 @@ function acceptCall() {
 
 function endCall(shouldNotify = true) {
   const targetUser = currentCallUser;
+  const endedType = currentCallType;
 
   document.getElementById("callInterface").style.display = "none";
+  stopRingTimeout();
 
   if (localStream) {
     localStream.getTracks().forEach(track => track.stop());
@@ -374,16 +747,135 @@ function endCall(shouldNotify = true) {
   localStream = null;
   remoteStream = null;
   peerConnection = null;
+  pendingOfferData = null;
   currentCallUser = null;
   currentCallType = null;
   isCaller = false;
 
+  detachCallMedia();
+
   if (shouldNotify && targetUser) {
-    socket.emit("endCall", { to: targetUser });
+    socket.emit("endCall", {
+      to: targetUser,
+      from: username,
+      type: endedType || "voice",
+      reason: "ended"
+    });
+  }
+}
+
+function startRingTimeout() {
+  stopRingTimeout();
+
+  ringTimeoutId = setTimeout(() => {
+    if (!isCaller || !currentCallUser) {
+      return;
+    }
+
+    const timedOutUser = currentCallUser;
+    const timedOutType = currentCallType || "voice";
+
+    socket.emit("missedCall", {
+      to: timedOutUser,
+      from: username,
+      type: timedOutType
+    });
+
+    socket.emit("endCall", {
+      to: timedOutUser,
+      from: username,
+      type: timedOutType,
+      reason: "timeout"
+    });
+
+    showCallNotice(`${timedOutUser} did not answer your call`);
+    endCall(false);
+  }, RING_TIMEOUT_MS);
+}
+
+function stopRingTimeout() {
+  if (ringTimeoutId) {
+    clearTimeout(ringTimeoutId);
+    ringTimeoutId = null;
+  }
+}
+
+function showCallNotice(text) {
+  const callNotice = document.getElementById("callNotice");
+  if (!callNotice) return;
+
+  callNotice.textContent = text;
+  callNotice.classList.add("show");
+
+  setTimeout(() => {
+    callNotice.classList.remove("show");
+  }, 4500);
+}
+
+function updateCallMediaUI(isVideoCall) {
+  const callVideoArea = document.getElementById("callVideoArea");
+  const localVideo = document.getElementById("localVideo");
+  const remoteVideo = document.getElementById("remoteVideo");
+  const callPlaceholder = document.getElementById("callPlaceholder");
+
+  if (!callVideoArea || !localVideo || !remoteVideo || !callPlaceholder) return;
+
+  callVideoArea.style.display = "block";
+
+  if (isVideoCall) {
+    localVideo.style.display = "block";
+    remoteVideo.style.display = "block";
+    callPlaceholder.style.display = "none";
+  } else {
+    localVideo.style.display = "none";
+    remoteVideo.style.display = "none";
+    callPlaceholder.style.display = "flex";
+  }
+}
+
+function attachLocalStream(stream, withVideo) {
+  const localVideo = document.getElementById("localVideo");
+  if (!localVideo) return;
+
+  if (withVideo) {
+    localVideo.srcObject = stream;
+    localVideo.style.display = "block";
+  }
+}
+
+function attachRemoteStream(stream) {
+  const remoteVideo = document.getElementById("remoteVideo");
+  if (!remoteVideo) return;
+
+  remoteVideo.srcObject = stream;
+}
+
+function detachCallMedia() {
+  const localVideo = document.getElementById("localVideo");
+  const remoteVideo = document.getElementById("remoteVideo");
+  const callPlaceholder = document.getElementById("callPlaceholder");
+
+  if (localVideo) {
+    localVideo.srcObject = null;
+    localVideo.style.display = "none";
+  }
+
+  if (remoteVideo) {
+    remoteVideo.srcObject = null;
+    remoteVideo.style.display = "none";
+  }
+
+  if (callPlaceholder) {
+    callPlaceholder.style.display = "flex";
   }
 }
 
 function send() {
+  if (!activeChatUser) {
+    alert("Select a connected user to chat.");
+    return;
+  }
+
   let msg = document.getElementById("msg").value;
   if (msg.trim() === "") return;
 
@@ -392,7 +884,8 @@ function send() {
   socket.emit("chat message", {
     msg: msg,
     roomId: currentRoom,
-    id: messageId
+    id: messageId,
+    to: activeChatUser
   });
 
   document.getElementById("msg").value = "";
@@ -405,54 +898,199 @@ function send() {
 }
 
 socket.on("chat message", function(data) {
+  if (!data || !data.user) return;
+
+  const otherUser = data.user === username ? activeChatUser : data.user;
+  const isCurrentConversation = !!activeChatUser && (data.user === username || data.user === activeChatUser);
+
+  if (isCurrentConversation) {
+    appendMessage(data);
+
+    if (data.user !== username && otherUser) {
+      socket.emit("markConversationRead", { otherUser });
+    }
+  } else if (data.user !== username) {
+    showCallNotice(`New message from ${data.user}`);
+  }
+
+  socket.emit("fetchSyncState");
+});
+
+function appendMessage(data) {
   let div = document.createElement("div");
   div.classList.add("message");
+  const isSentByMe = data.user === username;
+  const readBy = Array.isArray(data.readBy) ? data.readBy : [];
+  const isSeen = isSentByMe && activeChatUser && readBy.includes(activeChatUser);
 
-  if (data.user === username) {
+  if (isSentByMe) {
     div.classList.add("sent");
   } else {
     div.classList.add("received");
-
-    socket.emit("delivered", {
-      roomId: currentRoom,
-      id: data.id
-    });
-
-    socket.emit("seen", {
-      roomId: currentRoom,
-      id: data.id
-    });
   }
 
   div.innerHTML = `
-    <div id="msg-${data.id}">
+    <div id="msg-${data.id}" class="message-bubble">
       <div><strong>${data.user}</strong></div>
       <div>${data.original}</div>
       ${data.translated && data.translated !== data.original ? `<small><i class="fas fa-globe"></i> ${data.translated}</small>` : ""}
-      <small id="status-${data.id}" style="float:right;"><i class="fas fa-check"></i></small>
     </div>
+    ${isSentByMe ? `<div id="status-${data.id}" class="message-status ${isSeen ? 'seen' : 'sent-only'}">${getMessageStatusMarkup(isSeen)}</div>` : ""}
   `;
 
   const messages = document.getElementById("messages");
   messages.appendChild(div);
   messages.scrollTop = messages.scrollHeight;
-});
+}
+
+function getMessageStatusMarkup(isSeen) {
+  return isSeen ? '&#10003;&#10003;' : '&#10003;';
+}
+
+function renderEmptyChatState() {
+  const messages = document.getElementById("messages");
+  if (!messages) return;
+
+  messages.innerHTML = `
+    <div class="chat-empty-state">
+      <div class="chat-empty-icon"><i class="fas fa-comments"></i></div>
+      <h3>Inbox ready</h3>
+      <p>Select a friend from the left to continue the conversation.</p>
+    </div>
+  `;
+}
 
 socket.on("delivered", function(id) {
   let el = document.getElementById("status-" + id);
-  if (el) el.innerHTML = '<i class="fas fa-check-double"></i>';
+  if (el) {
+    el.classList.remove("seen");
+    el.classList.add("sent-only");
+    el.innerHTML = getMessageStatusMarkup(false);
+  }
 });
 
-socket.on("seen", function(id) {
-  let el = document.getElementById("status-" + id);
-  if (el) el.innerHTML = '<i class="fas fa-check-double" style="color:#10b981;"></i>';
+socket.on("seen", function(payload) {
+  const ids = Array.isArray(payload?.ids) ? payload.ids : [payload];
+  ids.forEach((id) => {
+    let el = document.getElementById("status-" + id);
+    if (el) {
+      el.classList.remove("sent-only");
+      el.classList.add("seen");
+      el.innerHTML = getMessageStatusMarkup(true);
+    }
+  });
 });
 
 function updateCallButtonStates() {
-  const callButtons = document.querySelectorAll(".call-btn");
+  const callButtons = document.querySelectorAll(".voice-call, .video-call");
   callButtons.forEach(button => {
-    button.disabled = !isInitialized;
+    button.disabled = !isInitialized || button.dataset.offline === "true";
   });
+}
+
+function getAvatarMarkup(user) {
+  if (user.avatar) {
+    return `<img class="user-avatar" src="${user.avatar}" alt="${user.name}">`;
+  }
+
+  const initial = (user.name || "U").charAt(0).toUpperCase();
+  return `<div class="user-avatar user-avatar-fallback">${initial}</div>`;
+}
+
+function handleProfilePhotoSelection(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  if (!file.type.startsWith("image/")) {
+    alert("Please select an image file only.");
+    event.target.value = "";
+    return;
+  }
+
+  if (file.size > 800 * 1024) {
+    alert("Image size should be less than 800KB.");
+    event.target.value = "";
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = function(loadEvent) {
+    pendingAvatarData = loadEvent.target.result;
+    setProfileAvatarPreview(pendingAvatarData, username);
+  };
+  reader.readAsDataURL(file);
+}
+
+function setProfileAvatarPreview(avatar, profileUsername) {
+  const image = document.getElementById("profileImage");
+  const initial = document.getElementById("profileInitial");
+
+  if (avatar) {
+    image.src = avatar;
+    image.style.display = "block";
+    initial.style.display = "none";
+  } else {
+    image.removeAttribute("src");
+    image.style.display = "none";
+    initial.textContent = (profileUsername || "U").charAt(0).toUpperCase();
+    initial.style.display = "flex";
+  }
+}
+
+function renderProfileModal(profile, editable) {
+  const profileTitle = document.getElementById("profileTitle");
+  const profileName = document.getElementById("profileName");
+  const profileEditor = document.getElementById("profileEditor");
+  const photoInput = document.getElementById("profilePhotoInput");
+
+  profileTitle.textContent = editable ? "My Profile" : "User Profile";
+  profileName.textContent = profile.username;
+  profileEditor.style.display = editable ? "block" : "none";
+  if (photoInput) photoInput.value = "";
+
+  setProfileAvatarPreview(profile.avatar || "", profile.username);
+}
+
+function showProfileModal() {
+  const profileModal = document.getElementById("profileModal");
+  profileModal.style.display = "flex";
+}
+
+function openProfile() {
+  viewingProfileUser = username;
+  pendingAvatarData = null;
+  renderProfileModal(myProfile, true);
+  showProfileModal();
+  socket.emit("getProfile", username);
+}
+
+function openUserProfile(targetUser, event) {
+  event.stopPropagation();
+  viewingProfileUser = targetUser;
+  pendingAvatarData = null;
+  socket.emit("getProfile", targetUser);
+}
+
+function closeProfile() {
+  const profileModal = document.getElementById("profileModal");
+  const photoInput = document.getElementById("profilePhotoInput");
+
+  profileModal.style.display = "none";
+  viewingProfileUser = null;
+  pendingAvatarData = null;
+  if (photoInput) photoInput.value = "";
+}
+
+function saveProfile() {
+  const avatarToSave = pendingAvatarData !== null ? pendingAvatarData : myProfile.avatar;
+  socket.emit("updateProfile", {
+    avatar: avatarToSave || ""
+  });
+}
+
+function removeProfilePhoto() {
+  pendingAvatarData = "";
+  setProfileAvatarPreview("", username);
 }
 
 window.startChat = startChat;
@@ -463,6 +1101,14 @@ window.endCall = endCall;
 window.send = send;
 window.typingHandler = typingHandler;
 window.handleKeyPress = handleKeyPress;
+window.openProfile = openProfile;
+window.openUserProfile = openUserProfile;
+window.closeProfile = closeProfile;
+window.saveProfile = saveProfile;
+window.removeProfilePhoto = removeProfilePhoto;
+window.sendConnectionRequest = sendConnectionRequest;
+window.respondRequest = respondRequest;
+window.openChatWithUser = openChatWithUser;
 </script>
 </body>
 </html>

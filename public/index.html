@@ -48,8 +48,9 @@ socket.on("loginError", (msg) => {
 });
 
 socket.on("loginSuccess", (username) => {
+  sessionStorage.setItem("username", username);
   localStorage.setItem("username", username);
-  window.location.href = "chat.html";
+  window.location.href = "home.html";
 });
 
 socket.on("registerError", (msg) => {

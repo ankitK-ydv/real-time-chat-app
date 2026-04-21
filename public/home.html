@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Chat App - Home</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+  <div class="home-shell">
+    <div class="home-topbar">
+      <div class="home-brand">
+        <i class="fas fa-comments"></i>
+        <span>Home</span>
+      </div>
+      <div class="home-top-actions">
+        <button class="home-btn" onclick="openMyProfile()"><i class="fas fa-user"></i> Profile</button>
+        <button class="home-btn primary" onclick="goToChat()"><i class="fas fa-message"></i> Chat</button>
+      </div>
+    </div>
+
+    <div class="home-grid">
+      <section class="home-panel">
+        <div class="home-panel-header">
+          <span><i class="fas fa-user-friends"></i> Your Friends</span>
+          <span id="friendCount">0</span>
+        </div>
+        <div id="friendsList" class="friends-list"></div>
+      </section>
+
+      <section class="home-panel">
+        <div class="home-panel-header">
+          <span><i class="fas fa-pen-to-square"></i> Create Post</span>
+          <span>Photos + Videos</span>
+        </div>
+        <div id="updatesStrip" class="updates-strip"></div>
+        <div class="composer">
+          <textarea id="postText" placeholder="Share something with your friends..."></textarea>
+          <input type="file" id="postMedia" accept="image/*,video/*">
+          <div id="composerPreview" class="composer-preview"></div>
+          <button class="home-btn primary" style="margin-top:12px;width:100%;" onclick="publishPost()"><i class="fas fa-paper-plane"></i> Post</button>
+        </div>
+        <div class="home-panel-header">
+          <span><i class="fas fa-star"></i> My Posts</span>
+          <span id="myPostCount">0</span>
+        </div>
+        <div id="myPostsList" class="feed-list"></div>
+        <div class="home-panel-header">
+          <span><i class="fas fa-fire"></i> Friends Feed</span>
+          <span id="postCount">0</span>
+        </div>
+        <div id="feedList" class="feed-list"></div>
+      </section>
+
+      <section class="home-panel">
+        <div class="home-panel-header">
+          <span><i class="fas fa-sparkles"></i> Suggestions</span>
+          <span id="suggestionCount">0</span>
+        </div>
+        <div id="suggestionsList" class="requests-list"></div>
+        <div class="home-panel-header" style="border-top:1px solid rgba(255,255,255,0.08);">
+          <span><i class="fas fa-bell"></i> Requests</span>
+          <span id="requestCount">0</span>
+        </div>
+        <div id="requestsList" class="requests-list"></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="home-modal" id="profileModal">
+    <div class="home-modal-card">
+      <button class="profile-close" onclick="closeProfileModal()"><i class="fas fa-times"></i></button>
+      <h3 id="profileModalTitle">Profile</h3>
+      <div class="profile-avatar-wrap" style="margin-top:16px;">
+        <img id="profileModalImage" class="profile-image" alt="Profile">
+        <div id="profileModalInitial" class="profile-initial">U</div>
+      </div>
+      <p id="profileModalName" class="profile-name"></p>
+      <div id="profileModalActions" class="profile-actions" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const username = sessionStorage.getItem("username") || localStorage.getItem("username");
+    if (!username) {
+      window.location.href = "index.html";
+    } else {
+      sessionStorage.setItem("username", username);
+    }
+
+    let homeData = {
+      me: username,
+      meAvatar: "",
+      connections: [],
+      incomingRequests: [],
+      outgoingRequests: [],
+      unreadByUser: {},
+      posts: []
+    };
+
+    let latestUsers = [];
+    let selectedProfileUser = null;
+    let selectedMedia = null;
+    let selectedMediaType = "none";
+    let hasRequestedInitialHomeData = false;
+
+    socket.on("connect", () => {
+      socket.emit("authenticate", username);
+    });
+
+    socket.on("authenticated", () => {
+      if (hasRequestedInitialHomeData) return;
+
+      hasRequestedInitialHomeData = true;
+      socket.emit("fetchHomeData");
+    });
+
+    socket.on("homeData", (data) => {
+      homeData = {
+        ...homeData,
+        ...data,
+        connections: Array.isArray(data.connections) ? data.connections : [],
+        incomingRequests: Array.isArray(data.incomingRequests) ? data.incomingRequests : [],
+        outgoingRequests: Array.isArray(data.outgoingRequests) ? data.outgoingRequests : [],
+        unreadByUser: data.unreadByUser || {},
+        posts: Array.isArray(data.posts) ? data.posts : []
+      };
+      renderHome();
+    });
+
+    socket.on("userList", (users) => {
+      latestUsers = Array.isArray(users) ? users.filter(user => user.name !== username) : [];
+      homeData.connections = homeData.connections.map(normalizeSocialUser).filter(Boolean);
+      renderHome();
+    });
+
+    socket.on("presenceSnapshot", (onlineUsers) => {
+      const onlineSet = new Set(Array.isArray(onlineUsers) ? onlineUsers : []);
+      latestUsers = latestUsers.map((user) => ({
+        ...user,
+        online: onlineSet.has(user.name)
+      }));
+      homeData.connections = homeData.connections.map((friend) => {
+        const normalized = normalizeSocialUser(friend);
+        if (!normalized) return null;
+        return {
+          ...normalized,
+          online: onlineSet.has(getUserName(friend))
+        };
+      }).filter(Boolean);
+      renderHome();
+    });
+
+    socket.on("syncState", (data) => {
+      homeData.connections = Array.isArray(data?.connections) ? data.connections.map(normalizeSocialUser).filter(Boolean) : [];
+      homeData.incomingRequests = Array.isArray(data?.incomingRequests) ? data.incomingRequests.map(normalizeSocialUser).filter(Boolean) : [];
+      homeData.outgoingRequests = Array.isArray(data?.outgoingRequests) ? data.outgoingRequests.map(normalizeSocialUser).filter(Boolean) : [];
+      homeData.unreadByUser = data?.unreadByUser || {};
+      renderHome();
+    });
+
+    socket.on("newPost", (post) => {
+      homeData.posts = [post, ...homeData.posts].slice(0, 40);
+      renderFeed();
+    });
+
+    socket.on("postUpdated", (update) => {
+      homeData.posts = homeData.posts.map((post) => post.id === update.id ? { ...post, likes: update.likes, shares: update.shares } : post);
+      renderFeed();
+    });
+
+    socket.on("homeError", (message) => {
+      alert(message || "Home data error");
+    });
+
+    socket.on("connectionError", (message) => {
+      alert(message || "Request failed");
+    });
+
+    socket.on("profileData", (profile) => {
+      if (!profile || profile.username !== selectedProfileUser) return;
+      renderProfileModal(profile);
+    });
+
+    document.getElementById("postMedia").addEventListener("change", handleMediaSelection);
+
+    function renderHome() {
+      renderUpdatesStrip();
+      renderFriends();
+      renderRequests();
+      renderSuggestions();
+      renderFeed();
+    }
+
+    function renderUpdatesStrip() {
+      const strip = document.getElementById("updatesStrip");
+      const items = [
+        {
+          username,
+          avatar: homeData.meAvatar || "",
+          label: "You",
+          online: true
+        },
+        ...homeData.connections.slice(0, 10).map((friend) => ({
+          ...friend,
+          label: friend.online ? "Active" : "Away"
+        }))
+      ];
+
+      strip.innerHTML = items.map((item) => `
+        <button class="story-card" onclick="openProfile('${item.username}')">
+          <div class="update-avatar-wrap">
+            ${avatarMarkup(item)}
+            <span class="update-status ${item.online ? 'online' : 'offline'}"></span>
+          </div>
+          <span class="update-name">${item.username === username ? 'You' : item.username}</span>
+          <span class="update-label">${item.label}</span>
+        </button>
+      `).join('');
+    }
+
+    function renderFriends() {
+      const friendsList = document.getElementById("friendsList");
+      const friendCount = document.getElementById("friendCount");
+      friendCount.textContent = homeData.connections.length;
+
+      if (!homeData.connections.length) {
+        friendsList.innerHTML = `<div class="empty-state">No friends yet. Accept requests to see them here.</div>`;
+        return;
+      }
+
+      friendsList.innerHTML = homeData.connections.map(friend => `
+        <div class="friend-card">
+          <div class="friend-meta">
+            ${avatarMarkup(friend)}
+            <div>
+              <div style="font-weight:700;">${getUserName(friend)}</div>
+              <div style="font-size:12px;color:${friend.online ? '#34d399' : '#94a3b8'};font-weight:600;">${friend.online ? 'Online' : 'Offline'}${friend.unreadCount > 0 ? ` • ${friend.unreadCount} new` : ''}</div>
+              <div style="font-size:12px;color:#cbd5e1;margin-top:4px;line-height:1.4;">${escapeHtml(friend.lastMessagePreview || 'No messages yet')}</div>
+            </div>
+          </div>
+          <div class="friend-actions">
+            <button class="home-action-btn blue" onclick="openProfile('${getUserName(friend)}')">View Profile</button>
+            <button class="home-action-btn green" onclick="messageFriend('${getUserName(friend)}')">Message</button>
+          </div>
+          ${friend.lastMessageAt ? `<div style="margin-top:8px;font-size:11px;color:#94a3b8;">${new Date(friend.lastMessageAt).toLocaleString()}</div>` : ''}
+        </div>
+      `).join('');
+    }
+
+    function renderRequests() {
+      const requestsList = document.getElementById("requestsList");
+      const requestCount = document.getElementById("requestCount");
+      requestCount.textContent = String(homeData.incomingRequests.length + homeData.outgoingRequests.length);
+
+      const incoming = homeData.incomingRequests.map((req) => `
+        <div class="request-card">
+          <div class="request-meta">
+            ${avatarMarkup(req)}
+            <div>
+              <div style="font-weight:700;">${req.username}</div>
+              <div style="font-size:12px;color:#cbd5e1;">Wants to connect</div>
+            </div>
+          </div>
+          <div class="request-actions">
+            <button class="home-action-btn green" onclick="respondRequest('${req.username}','accept')">Accept</button>
+            <button class="home-action-btn red" onclick="respondRequest('${req.username}','reject')">Reject</button>
+          </div>
+        </div>
+      `).join('');
+
+      const outgoing = homeData.outgoingRequests.map((req) => `
+        <div class="request-card">
+          <div class="request-meta">
+            ${avatarMarkup(req)}
+            <div>
+              <div style="font-weight:700;">${req.username}</div>
+              <div style="font-size:12px;color:#cbd5e1;">Request pending</div>
+            </div>
+          </div>
+        </div>
+      `).join('');
+
+      if (!incoming && !outgoing) {
+        requestsList.innerHTML = `<div class="empty-state">No pending requests.</div>`;
+        return;
+      }
+
+      requestsList.innerHTML = `<h4 style="margin:0 0 8px;">Incoming</h4>${incoming || '<div class="empty-state">None</div>'}<h4 style="margin:14px 0 8px;">Outgoing</h4>${outgoing || '<div class="empty-state">None</div>'}`;
+    }
+
+    function renderSuggestions() {
+      const suggestionsList = document.getElementById("suggestionsList");
+      const suggestions = latestUsers.filter((user) => {
+        return !homeData.connections.some((friend) => getUserName(friend) === user.name)
+          && !homeData.incomingRequests.some((req) => getUserName(req) === user.name)
+          && !homeData.outgoingRequests.some((req) => getUserName(req) === user.name);
+      }).slice(0, 8);
+
+      const suggestionCount = document.getElementById("suggestionCount");
+      if (suggestionCount) {
+        suggestionCount.textContent = String(suggestions.length);
+      }
+
+      if (!suggestions.length) {
+        suggestionsList.innerHTML = `<div class="empty-state">No suggestions right now.</div>`;
+        return;
+      }
+
+      suggestionsList.innerHTML = suggestions.map((user) => `
+        <div class="suggestion-card">
+          <div class="friend-meta">
+            ${avatarMarkup({ username: user.name, avatar: user.avatar })}
+            <div>
+              <div style="font-weight:700;">${user.name}</div>
+              <div style="font-size:12px;color:${user.online ? '#34d399' : '#94a3b8'};font-weight:600;">${user.online ? 'Online' : 'Offline'}</div>
+            </div>
+          </div>
+          <div class="friend-actions">
+            <button class="home-action-btn blue" onclick="openProfile('${user.name}')">View Profile</button>
+            <button class="home-action-btn green" onclick="sendConnectionRequest('${user.name}')">Connect</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderFeed() {
+      const feedList = document.getElementById("feedList");
+      const myPostsList = document.getElementById("myPostsList");
+      const myPosts = homeData.posts.filter((post) => post.author === username);
+      const friendsOnly = homeData.posts.filter((post) => post.author !== username);
+      const postCount = document.getElementById("postCount");
+      const myPostCount = document.getElementById("myPostCount");
+      postCount.textContent = friendsOnly.length;
+      myPostCount.textContent = myPosts.length;
+
+      myPostsList.innerHTML = myPosts.length ? myPosts.map(renderPostCard).join('') : `<div class="empty-state">Your posts will appear here.</div>`;
+      feedList.innerHTML = friendsOnly.length ? friendsOnly.map(renderPostCard).join('') : `<div class="empty-state">No friends' posts yet.</div>`;
+    }
+
+    function renderPostCard(post) {
+      return `
+        <article class="post-card">
+          <div class="post-meta">
+            ${avatarMarkup({ username: post.author })}
+            <div>
+              <div style="font-weight:700;">${post.author}</div>
+              <div style="font-size:12px;color:#cbd5e1;">${new Date(post.createdAt).toLocaleString()}</div>
+            </div>
+          </div>
+          ${post.text ? `<div class="post-content">${escapeHtml(post.text)}</div>` : ''}
+          ${post.media && post.mediaType !== 'none' ? renderMedia(post) : ''}
+          <div class="post-stats">
+            <span><i class="fas fa-heart"></i> <span id="likes-${post.id}">${post.likes}</span></span>
+            <span><i class="fas fa-share"></i> <span id="shares-${post.id}">${post.shares}</span></span>
+          </div>
+          <div class="post-actions">
+            <button class="home-action-btn ${post.likedByMe ? 'red' : 'blue'}" onclick="toggleLike('${post.id}')"><i class="fas fa-heart"></i> ${post.likedByMe ? 'Unlike' : 'Like'}</button>
+            <button class="home-action-btn green" onclick="sharePost('${post.id}')"><i class="fas fa-share"></i> Share</button>
+            <button class="home-action-btn" onclick="messageFriend('${post.author}')"><i class="fas fa-comment"></i> Message</button>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderMedia(post) {
+      if (post.mediaType === 'image') {
+        return `<div class="post-media"><img src="${post.media}" alt="post image"></div>`;
+      }
+      if (post.mediaType === 'video') {
+        return `<div class="post-media"><video src="${post.media}" autoplay muted loop playsinline controls preload="metadata"></video></div>`;
+      }
+      return '';
+    }
+
+    function avatarMarkup(user) {
+      const name = getUserName(user);
+      const avatar = typeof user === "object" && user ? (user.avatar || "") : "";
+      if (avatar) {
+        return `<img class="friend-avatar" src="${avatar}" alt="${name}">`;
+      }
+      const initial = (name || 'U').charAt(0).toUpperCase();
+      return `<div class="friend-avatar" style="display:flex;align-items:center;justify-content:center;background:#334155;color:#fff;font-weight:700;">${initial}</div>`;
+    }
+
+    function getUserName(user) {
+      if (!user) return "";
+      if (typeof user === "string") return user;
+      return user.username || user.name || "";
+    }
+
+    function normalizeSocialUser(user) {
+      const resolvePresence = (name) => {
+        const match = latestUsers.find((item) => item.name === name || item.username === name);
+        return {
+          online: Boolean(match?.online),
+          avatar: match?.avatar || ""
+        };
+      };
+
+      if (!user) return null;
+      if (typeof user === "string") {
+        const presence = resolvePresence(user);
+        return {
+          username: user,
+          avatar: presence.avatar,
+          online: presence.online,
+          unreadCount: 0,
+          lastMessagePreview: "No messages yet",
+          lastMessageAt: null
+        };
+      }
+
+      const name = user.username || user.name || "";
+      const presence = resolvePresence(name);
+      return {
+        ...user,
+        username: name,
+        avatar: user.avatar || presence.avatar,
+        online: typeof user.online === "boolean" ? user.online : presence.online,
+        unreadCount: Number(user.unreadCount || 0),
+        lastMessagePreview: user.lastMessagePreview || "No messages yet",
+        lastMessageAt: user.lastMessageAt || null
+      };
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/[&<>"]+/g, (match) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[match] || match));
+    }
+
+    function handleMediaSelection(event) {
+      const file = event.target.files && event.target.files[0];
+      const preview = document.getElementById("composerPreview");
+      preview.innerHTML = '';
+      selectedMedia = null;
+      selectedMediaType = 'none';
+
+      if (!file) return;
+
+      if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+        alert('Please choose an image or video file.');
+        event.target.value = '';
+        return;
+      }
+
+      if (file.type.startsWith('video/') && file.size > 12 * 1024 * 1024) {
+        alert('Video should be smaller than 12MB.');
+        event.target.value = '';
+        return;
+      }
+
+      if (file.type.startsWith('image/') && file.size > 6 * 1024 * 1024) {
+        alert('Image should be smaller than 6MB.');
+        event.target.value = '';
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = function(loadEvent) {
+        selectedMedia = loadEvent.target.result;
+        selectedMediaType = file.type.startsWith('image/') ? 'image' : 'video';
+        if (selectedMediaType === 'video') {
+          const tempVideo = document.createElement('video');
+          tempVideo.preload = 'metadata';
+          tempVideo.onloadedmetadata = function() {
+            window.URL.revokeObjectURL(tempVideo.src);
+            if (tempVideo.duration > 30) {
+              alert('Video must be 30 seconds or less.');
+              selectedMedia = null;
+              selectedMediaType = 'none';
+              preview.innerHTML = '';
+              event.target.value = '';
+              return;
+            }
+            preview.innerHTML = `<video src="${selectedMedia}" controls playsinline></video>`;
+          };
+          tempVideo.src = selectedMedia;
+          preview.innerHTML = `<video src="${selectedMedia}" controls playsinline></video>`;
+        } else {
+          preview.innerHTML = `<img src="${selectedMedia}" alt="preview">`;
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function publishPost() {
+      const text = document.getElementById('postText').value.trim();
+      if (!text && !selectedMedia) {
+        alert('Write something or add media first.');
+        return;
+      }
+
+      socket.emit('createPost', {
+        text,
+        media: selectedMedia || '',
+        mediaType: selectedMediaType
+      });
+
+      document.getElementById('postText').value = '';
+      document.getElementById('postMedia').value = '';
+      document.getElementById('composerPreview').innerHTML = '';
+      selectedMedia = null;
+      selectedMediaType = 'none';
+    }
+
+    function toggleLike(postId) {
+      socket.emit('toggleLikePost', { postId });
+    }
+
+    function sharePost(postId) {
+      socket.emit('sharePost', { postId });
+      const shareUrl = `${window.location.origin}/home.html`;
+      if (navigator.share) {
+        navigator.share({
+          title: 'Chat App Post',
+          text: 'Check this post on Chat App',
+          url: shareUrl
+        }).catch(() => {});
+      } else if (navigator.clipboard) {
+        navigator.clipboard.writeText(shareUrl).then(() => {
+          alert('Home link copied to clipboard.');
+        }).catch(() => {});
+      }
+    }
+
+    function respondRequest(fromUser, action) {
+      socket.emit('respondConnectionRequest', { from: fromUser, action });
+      socket.emit('fetchHomeData');
+    }
+
+    function sendConnectionRequest(targetUser) {
+      socket.emit('sendConnectionRequest', { to: targetUser });
+    }
+
+    function messageFriend(friendUsername) {
+      sessionStorage.setItem('pendingChatUser', friendUsername);
+      localStorage.removeItem('activeChatUser');
+      window.location.href = 'chat.html';
+    }
+
+    function goToChat() {
+      if (homeData.connections.length) {
+        sessionStorage.setItem('pendingChatUser', homeData.connections[0].username);
+        localStorage.removeItem('activeChatUser');
+      }
+      window.location.href = 'chat.html';
+    }
+
+    function openMyProfile() {
+      openProfile(username);
+    }
+
+    function openProfile(profileUsername) {
+      selectedProfileUser = profileUsername;
+      socket.emit('getProfile', profileUsername);
+      document.getElementById('profileModal').style.display = 'flex';
+      document.getElementById('profileModalName').textContent = profileUsername;
+      document.getElementById('profileModalTitle').textContent = profileUsername === username ? 'My Profile' : 'User Profile';
+    }
+
+    function renderProfileModal(profile) {
+      document.getElementById('profileModalName').textContent = profile.username;
+      const img = document.getElementById('profileModalImage');
+      const initial = document.getElementById('profileModalInitial');
+      const actions = document.getElementById('profileModalActions');
+      if (profile.avatar) {
+        img.src = profile.avatar;
+        img.style.display = 'block';
+        initial.style.display = 'none';
+      } else {
+        img.style.display = 'none';
+        initial.style.display = 'flex';
+        initial.textContent = profile.username.charAt(0).toUpperCase();
+      }
+      actions.innerHTML = profile.username === username
+        ? `<button class="home-action-btn blue" onclick="window.location.href='chat.html'">Open Chat</button>`
+        : `<button class="home-action-btn green" onclick="messageFriend('${profile.username}')">Message</button>`;
+    }
+
+    function closeProfileModal() {
+      document.getElementById('profileModal').style.display = 'none';
+    }
+
+    socket.on('profileData', (profile) => {
+      if (!profile || profile.username !== selectedProfileUser) return;
+      renderProfileModal(profile);
+    });
+
+    window.addEventListener('click', (event) => {
+      const modal = document.getElementById('profileModal');
+      if (event.target === modal) closeProfileModal();
+    });
+  </script>
+</body>
+</html>
