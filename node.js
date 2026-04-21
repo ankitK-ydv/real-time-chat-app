@@ -44,14 +44,31 @@ const User = mongoose.model("User", userSchema);
 
 const connectionSchema = new mongoose.Schema(
   {
-    users: [{ type: String, required: true }],
+    users: [{ type: String }],
+    members: [{ type: String }],
+    pairKey: { type: String },
     requestedBy: { type: String, required: true },
     status: { type: String, enum: ["pending", "accepted"], default: "pending" }
   },
   { timestamps: true }
 );
 
-connectionSchema.index({ users: 1 }, { unique: true });
+connectionSchema.index({ members: 1, status: 1 });
+connectionSchema.index(
+  { pairKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { pairKey: { $type: "string" } }
+  }
+);
+
+connectionSchema.pre("validate", function setConnectionPairKey() {
+  const pairSource = Array.isArray(this.members) && this.members.length === 2 ? this.members : this.users;
+  if (Array.isArray(pairSource) && pairSource.length === 2) {
+    this.members = getPair(pairSource[0], pairSource[1]);
+    this.pairKey = getPairKey(this.members[0], this.members[1]);
+  }
+});
 
 const messageSchema = new mongoose.Schema(
   {
@@ -89,14 +106,36 @@ function getPair(userA, userB) {
   return [userA, userB].sort();
 }
 
+function getPairKey(userA, userB) {
+  return JSON.stringify(getPair(userA, userB));
+}
+
+function getConnectionPairFilter(userA, userB) {
+  const usersPair = getPair(userA, userB);
+  return {
+    $or: [
+      { pairKey: getPairKey(userA, userB) },
+      { members: usersPair },
+      { users: usersPair }
+    ]
+  };
+}
+
+function getConnectionMembers(connection) {
+  if (Array.isArray(connection.members) && connection.members.length) return connection.members;
+  if (Array.isArray(connection.users) && connection.users.length) return connection.users;
+  return [];
+}
+
 function getPrivateRoomId(userA, userB) {
   return getPair(userA, userB).join("_");
 }
 
 async function getSyncState(username) {
-  const accepted = await Connection.find({ users: username, status: "accepted" }).select("users").lean();
-  const incoming = await Connection.find({ users: username, status: "pending", requestedBy: { $ne: username } }).select("requestedBy").lean();
-  const outgoing = await Connection.find({ users: username, status: "pending", requestedBy: username }).select("users").lean();
+  const memberFilter = { $or: [{ members: username }, { users: username }] };
+  const accepted = await Connection.find({ ...memberFilter, status: "accepted" }).select("members users").lean();
+  const incoming = await Connection.find({ ...memberFilter, status: "pending", requestedBy: { $ne: username } }).select("requestedBy").lean();
+  const outgoing = await Connection.find({ ...memberFilter, status: "pending", requestedBy: username }).select("members users").lean();
   const unreadMessages = await Message.find({
     participants: username,
     sender: { $ne: username },
@@ -111,9 +150,9 @@ async function getSyncState(username) {
   });
 
   return {
-    connections: accepted.map((item) => item.users.find((user) => user !== username)).filter(Boolean),
+    connections: accepted.map((item) => getConnectionMembers(item).find((user) => user !== username)).filter(Boolean),
     incomingRequests: incoming.map((item) => item.requestedBy),
-    outgoingRequests: outgoing.map((item) => item.users.find((user) => user !== username)).filter(Boolean),
+    outgoingRequests: outgoing.map((item) => getConnectionMembers(item).find((user) => user !== username)).filter(Boolean),
     unreadByUser
   };
 }
@@ -240,8 +279,10 @@ function emitPresenceSnapshot(ioServer = io) {
 }
 
 async function hasAcceptedConnection(userA, userB) {
-  const usersPair = getPair(userA, userB);
-  const existingConnection = await Connection.findOne({ users: usersPair, status: "accepted" }).select("_id").lean();
+  const existingConnection = await Connection.findOne({
+    ...getConnectionPairFilter(userA, userB),
+    status: "accepted"
+  }).select("_id").lean();
   return !!existingConnection;
 }
 
@@ -367,6 +408,51 @@ async function connectMongoDB(trigger = "startup") {
 
 function isDatabaseReady() {
   return mongoose.connection.readyState === 1;
+}
+
+async function ensureConnectionIndexes() {
+  if (!isDatabaseReady()) return;
+
+  try {
+    await Connection.createCollection();
+    const collection = Connection.collection;
+    const indexes = await collection.indexes();
+    const oldUniqueUsersIndex = indexes.find((index) => index.name === "users_1" && index.unique);
+
+    if (oldUniqueUsersIndex) {
+      await collection.dropIndex("users_1");
+      console.log("Dropped old unique users_1 connection index");
+    }
+
+    const needsPairKey = await Connection.find({
+      $or: [
+        { pairKey: { $exists: false } },
+        { pairKey: "" },
+        { members: { $exists: false } },
+        { members: { $size: 0 } }
+      ]
+    });
+
+    for (const connection of needsPairKey) {
+      const existingMembers = getConnectionMembers(connection);
+      if (existingMembers.length !== 2) continue;
+      connection.members = getPair(existingMembers[0], existingMembers[1]);
+      connection.pairKey = getPairKey(connection.members[0], connection.members[1]);
+      await connection.save();
+    }
+
+    await collection.createIndex({ members: 1, status: 1 }, { name: "members_1_status_1" });
+    await collection.createIndex(
+      { pairKey: 1 },
+      {
+        name: "pairKey_1",
+        unique: true,
+        partialFilterExpression: { pairKey: { $type: "string" } }
+      }
+    );
+  } catch (error) {
+    console.error("Connection index maintenance failed:", error.message);
+  }
 }
 
 io.on("connection", (socket) => {
@@ -602,7 +688,8 @@ socket.on("sendConnectionRequest", async ({ to }) => {
     }
 
     const usersPair = getPair(socket.username, toUser);
-    const existingConnection = await Connection.findOne({ users: usersPair }).lean();
+    const pairKey = getPairKey(socket.username, toUser);
+    const existingConnection = await Connection.findOne(getConnectionPairFilter(socket.username, toUser)).lean();
 
     if (existingConnection?.status === "accepted") {
       socket.emit("connectionError", "Already connected");
@@ -615,7 +702,9 @@ socket.on("sendConnectionRequest", async ({ to }) => {
     }
 
     await Connection.create({
-      users: usersPair,
+      users: [pairKey],
+      members: usersPair,
+      pairKey,
       requestedBy: socket.username,
       status: "pending"
     });
@@ -647,9 +736,8 @@ socket.on("respondConnectionRequest", async ({ from, action }) => {
   }
 
   try {
-    const usersPair = getPair(socket.username, fromUser);
     const request = await Connection.findOne({
-      users: usersPair,
+      ...getConnectionPairFilter(socket.username, fromUser),
       status: "pending",
       requestedBy: fromUser
     });
@@ -1126,6 +1214,7 @@ mongoose.connection.on("connected", () => {
     mongoReconnectTimer = null;
   }
   console.log("MongoDB status: connected");
+  ensureConnectionIndexes();
 });
 
 mongoose.connection.on("disconnected", () => {

@@ -105,6 +105,8 @@
     let selectedMedia = null;
     let selectedMediaType = "none";
     let hasRequestedInitialHomeData = false;
+    let directoryUsers = [];
+    let onlineUsers = [];
 
     socket.on("connect", () => {
       socket.emit("authenticate", username);
@@ -115,6 +117,7 @@
 
       hasRequestedInitialHomeData = true;
       socket.emit("fetchHomeData");
+      socket.emit("fetchAllUsers");
     });
 
     socket.on("homeData", (data) => {
@@ -131,8 +134,15 @@
     });
 
     socket.on("userList", (users) => {
-      latestUsers = Array.isArray(users) ? users.filter(user => user.name !== username) : [];
+      onlineUsers = Array.isArray(users) ? users : [];
+      rebuildLatestUsers();
       homeData.connections = homeData.connections.map(normalizeSocialUser).filter(Boolean);
+      renderHome();
+    });
+
+    socket.on("allUsers", (users) => {
+      directoryUsers = Array.isArray(users) ? users : [];
+      rebuildLatestUsers();
       renderHome();
     });
 
@@ -179,6 +189,11 @@
       alert(message || "Request failed");
     });
 
+    socket.on("loginError", (message) => {
+      alert(message || "Please login again");
+      window.location.href = "index.html";
+    });
+
     socket.on("profileData", (profile) => {
       if (!profile || profile.username !== selectedProfileUser) return;
       renderProfileModal(profile);
@@ -192,6 +207,33 @@
       renderRequests();
       renderSuggestions();
       renderFeed();
+    }
+
+    function rebuildLatestUsers() {
+      const byName = new Map();
+
+      directoryUsers.forEach((user) => {
+        const name = user?.name || user?.username || "";
+        if (!name || name === username) return;
+        byName.set(name, {
+          name,
+          avatar: user.avatar || "",
+          online: Boolean(user.online)
+        });
+      });
+
+      onlineUsers.forEach((user) => {
+        const name = user?.name || user?.username || "";
+        if (!name || name === username) return;
+        const existing = byName.get(name) || { name, avatar: "" };
+        byName.set(name, {
+          ...existing,
+          avatar: user.avatar || existing.avatar || "",
+          online: Boolean(user.online)
+        });
+      });
+
+      latestUsers = Array.from(byName.values());
     }
 
     function renderUpdatesStrip() {
