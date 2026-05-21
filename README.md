@@ -19,6 +19,16 @@ A modern, real-time chat application built with **Node.js**, **Express**, and **
 
 ---
 
+## 📸 Screenshots
+
+### Desktop Chat Interface
+
+![Desktop View](screenshots/desktop.png)
+
+### Mobile Responsive View
+
+![Mobile View](screenshots/mobile.png)
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -162,81 +172,29 @@ npm start
 
 ---
 
-## 🛠️ Database Schema
+## 🛠️ Database Structure
 
-### User
+- **Users** – Stores user accounts, profile pictures, and login details
+- **Connections** – Manages friend requests and user connections
+- **Messages** – Stores chat messages and read status between users
+- **Posts** – Handles user posts, media sharing, likes, and interactions
 
-- `username` - Unique username
-- `password` - Encrypted password
-- `avatar` - Profile picture (base64)
-- `timestamps` - Created and updated dates
+## ⚙️ Environment Variables
 
-### Connection
-
-- `members` - Two usernames [user1, user2]
-- `status` - "pending" or "accepted"
-- `requestedBy` - Who sent the request
-- `pairKey` - Unique identifier for the pair
-
-### Message
-
-- `roomId` - Chat room ID
-- `sender` - Who sent the message
-- `original` - Message text
-- `participants` - Both users involved
-- `readBy` - List of users who read it
-- `timestamps` - When sent and read
-
-### Post
-
-- `author` - Who wrote it
-- `text` - Post content
-- `media` - Image or video (base64)
-- `likes` - Number of likes
-- `shares` - Number of shares
-- `timestamps` - When posted
-
----
-
-## ⚙️ Environment Variables Explained
-
-| Variable                           | Purpose                      | Default                   |
-| ---------------------------------- | ---------------------------- | ------------------------- |
-| `PORT`                             | Server port number           | 3000                      |
-| `MONGODB_URI`                      | Remote MongoDB connection    | -                         |
-| `LOCAL_MONGODB_URI`                | Local MongoDB connection     | mongodb://127.0.0.1:27017 |
-| `BCRYPT_ROUNDS`                    | Password encryption strength | 12                        |
-| `ALLOW_LOCAL_MONGODB_FALLBACK`     | Use local DB if remote fails | true                      |
-| `ALLOW_IN_MEMORY_MONGODB_FALLBACK` | Use memory DB if all fail    | true                      |
+- `PORT` – Server running port
+- `MONGODB_URI` – MongoDB database connection
+- `BCRYPT_ROUNDS` – Password encryption level
+- `ALLOW_LOCAL_MONGODB_FALLBACK` – Uses local database if remote DB fails
 
 ---
 
 ## 🐛 Troubleshooting
 
-### Server won't start?
+### Server Not Starting?
 
 ```bash
-# Make sure Node.js is installed
-node --version
-
-# Reinstall packages
-rm -rf node_modules package-lock.json
 npm install
 npm start
-```
-
-### Can't connect to MongoDB?
-
-- Check if MongoDB is running on your computer
-- Or update `.env` with MongoDB Atlas cloud connection string
-- MongoDB Atlas is free: https://www.mongodb.com/cloud/atlas
-
-### Port 3000 already in use?
-
-```bash
-# Change PORT in .env file
-PORT=3001
-# Then restart the server
 ```
 
 ---
@@ -253,50 +211,20 @@ To deploy on platforms like Render, Vercel, or Heroku:
 
 ---
 
-## 📚 Learning Resources
-
-- [Node.js Documentation](https://nodejs.org/en/docs/)
-- [Express Guide](https://expressjs.com/)
-- [Socket.io Tutorial](https://socket.io/docs/v4/server-installation/)
-- [MongoDB Basics](https://docs.mongodb.com/manual/)
-- [JavaScript Guide](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide)
-
----
-
-## 💡 Tips for Beginners
-
-1. **Understanding the flow:**
-   - User opens `index.html` → Logs in → Redirected to `home.html` → Clicks a user → Opens `chat.html`
-
-2. **Real-time magic:**
-   - All users connected via Socket.io on same server
-   - When one user sends message, server broadcasts to other user instantly
-   - No page refresh needed!
-
-3. **Security:**
-   - Never commit `.env` file (contains secrets)
-   - Passwords are encrypted with bcrypt (not stored as plain text)
-   - Always validate user input on server side
-
-4. **Database:**
-   - MongoDB stores everything permanently
-   - Messages won't disappear after refresh
-   - Can query old messages anytime
-
----
-
-## 📄 License
+## License
 
 This project is open source and available under the ISC License.
 
 ---
 
-## 🤝 Contributing
+## 🚧 Ongoing Improvements
 
-Feel free to fork, modify, and improve this project! It's a great way to learn.
+This project is actively being improved with a focus on performance optimization, better real-time communication, enhanced UI/UX, and additional features to make the platform more stable and scalable.
 
----
+Planned improvements include:
 
-**Happy Coding! 🚀**
-
-If you have questions, feel free to ask!
+- Enhanced real-time messaging
+- Better responsive experience
+- Performance optimization
+- Improved user authentication
+- Additional chat and social features
